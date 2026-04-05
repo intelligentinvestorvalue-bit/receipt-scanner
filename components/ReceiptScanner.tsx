@@ -239,8 +239,10 @@ export default function ReceiptScanner() {
               type="number"
               step="0.01"
               min="0"
-              value={receipt.amount}
+              value={receipt.amount === 0 ? "" : receipt.amount}
+              onFocus={(e) => { if (receipt.amount === 0) e.target.value = ""; }}
               onChange={(e) => setReceipt({ ...receipt, amount: parseFloat(e.target.value) || 0 })}
+              placeholder="0.00"
               className="border border-gray-300 rounded-lg px-3 py-2 text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-400"
             />
           </label>
