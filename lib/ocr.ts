@@ -46,73 +46,129 @@ export async function ocrReceiptImage(base64Image: string): Promise<string> {
 }
 
 /**
+ * Normalise raw OCR text before parsing:
+ * - Collapse spaced letters "T O T A L" → "TOTAL"
+ * - Strip common OCR noise characters
+ * - Normalise currency symbols to $
+ */
+function normaliseText(text: string): string {
+  return text
+    .replace(/\b([A-Z])(?:\s+([A-Z])){2,}\b/g, (m) => m.replace(/\s+/g, "")) // spaced letters
+    .replace(/[£€¥₹]/g, "$")       // treat all currencies the same
+    .replace(/\|/g, "")             // OCR pipe noise
+    .replace(/\s{2,}/g, " ");       // collapse multiple spaces
+}
+
+/**
+ * Parse a raw amount string → number. Handles "1,234.56", "1.234,56" (EU), "1234.56"
+ */
+function parseAmount(raw: string): number {
+  // EU format: 1.234,56 → swap . and ,
+  const euFormat = /^\d{1,3}(\.\d{3})+(,\d{2})$/.test(raw);
+  const cleaned = euFormat
+    ? raw.replace(/\./g, "").replace(",", ".")
+    : raw.replace(/,/g, "");
+  return parseFloat(cleaned);
+}
+
+/**
  * Extract total amount from OCR text.
- * Handles many real-world receipt formats:
- *   TOTAL         $42.17
- *   Total:        42.17
- *   TOTAL - $58.99
- *   TOTAL.....$12.00
- *   AMOUNT DUE    $123.00
- *   BALANCE DUE   $58.99
- *   Total Amount Due: $9.75
- *   Sale Total    8.49
- *   T O T A L     15.00   (spaced letters)
+ *
+ * Handles paper receipts AND digital/email receipts:
+ *
+ * Paper:
+ *   TOTAL $42.17 | TOTAL - $58.99 | TOTAL.....12.00 | T O T A L 15.00
+ *   AMOUNT DUE $123.00 | BALANCE DUE $58.99 | GRAND TOTAL $9.75
+ *
+ * Email / digital (Amazon, Uber, DoorDash, PayPal, etc.):
+ *   Order Total: $42.17
+ *   Total Charged: $38.00
+ *   Charged to your card: $15.74
+ *   You were charged $29.99
+ *   Payment of $12.50
+ *   Transaction Total $99.00
+ *   Amount Charged $7.49
+ *   Total Payment: $55.00
+ *   Charge: $18.25
  */
 export function extractTotal(text: string): number | null {
-  const lines = text.split("\n").map((l) => l.trim());
+  const norm = normaliseText(text);
+  const lines = norm.split("\n").map((l) => l.trim());
 
-  // Normalise spaced letters like "T O T A L" → "TOTAL"
-  const normalised = text.replace(/\b([A-Z])(?:\s+([A-Z])){2,}\b/g, (m) =>
-    m.replace(/\s+/g, "")
-  );
+  // Separator: any combo of spaces, dashes, dots, colons, pipes
+  const sep = "[\\s\\-.:_*|]+";
+  // Amount pattern: optional $, digits with optional comma grouping, decimal
+  const amt = "\\$?([\\d,]+\\.\\d{2})";
 
-  // Separator between label and amount: spaces, dashes, dots, colons, or any combo
-  const sep = "[\\s\\-.:_*]+";
-
-  // Priority patterns — most specific first
-  const totalPatterns = [
-    new RegExp(`(?:grand\\s+total|total\\s+due|amount\\s+due|balance\\s+due|total\\s+amount(?:\\s+due)?)${sep}\\$?([\\d,]+\\.\\d{2})`, "i"),
-    new RegExp(`(?:sale\\s+total|subtotal\\s+due|net\\s+total)${sep}\\$?([\\d,]+\\.\\d{2})`, "i"),
-    new RegExp(`\\btotal\\b${sep}\\$?([\\d,]+\\.\\d{2})`, "i"),
-    new RegExp(`\\bbalance\\b${sep}\\$?([\\d,]+\\.\\d{2})`, "i"),
-    new RegExp(`\\bamount\\b${sep}\\$?([\\d,]+\\.\\d{2})`, "i"),
+  // ── Tier 1: High-confidence specific patterns ──────────────────────────────
+  // Order matters: most specific first to avoid false positives
+  const tier1 = [
+    // Email receipt patterns
+    `(?:order|transaction|invoice)\\s+total${sep}${amt}`,
+    `total\\s+(?:charged|billed|payment|amount|due|cost)${sep}${amt}`,
+    `(?:amount|total)\\s+charged${sep}${amt}`,
+    `charged\\s+to\\s+(?:your\\s+)?(?:card|account|visa|mastercard|amex)${sep}${amt}`,
+    `you\\s+(?:were\\s+)?(?:charged|paid|billed)${sep}${amt}`,
+    `payment\\s+(?:of|total|amount)${sep}${amt}`,
+    `total\\s+payment${sep}${amt}`,
+    `amount\\s+paid${sep}${amt}`,
+    // Paper receipt patterns
+    `grand\\s+total${sep}${amt}`,
+    `total\\s+due${sep}${amt}`,
+    `amount\\s+due${sep}${amt}`,
+    `balance\\s+due${sep}${amt}`,
+    `total\\s+amount(?:\\s+due)?${sep}${amt}`,
+    `sale\\s+total${sep}${amt}`,
+    `net\\s+total${sep}${amt}`,
+    `subtotal\\s+due${sep}${amt}`,
   ];
 
-  // Try normalised full-text patterns
-  for (const pattern of totalPatterns) {
-    const match = normalised.match(pattern);
-    if (match) {
-      const value = parseFloat(match[1].replace(/,/g, ""));
-      if (value > 0) return value;
+  for (const pattern of tier1) {
+    const m = norm.match(new RegExp(pattern, "i"));
+    if (m) {
+      const v = parseAmount(m[1]);
+      if (v > 0 && v < 99999) return v;
     }
   }
 
-  // Line-by-line scan — label on one line, amount on same line or up to 2 lines below
-  const totalLabelRe = /\b(grand\s+total|total\s+due|amount\s+due|balance\s+due|total\s+amount|sale\s+total|total|balance|amount\s+paid)\b/i;
+  // ── Tier 2: Generic "total" and "charge" labels ────────────────────────────
+  const tier2 = [
+    `\\btotal\\b${sep}${amt}`,
+    `\\bcharge\\b${sep}${amt}`,
+    `\\bbalance\\b${sep}${amt}`,
+  ];
+
+  for (const pattern of tier2) {
+    const m = norm.match(new RegExp(pattern, "i"));
+    if (m) {
+      const v = parseAmount(m[1]);
+      if (v > 0 && v < 99999) return v;
+    }
+  }
+
+  // ── Tier 3: Line-by-line — label on one line, amount up to 2 lines below ──
+  const labelRe = /\b(grand\s+total|order\s+total|total\s+charged|total\s+due|amount\s+due|balance\s+due|total\s+amount|sale\s+total|total\s+payment|amount\s+paid|total|balance|charge)\b/i;
   const amountRe = /\$?([\d,]+\.\d{2})/;
 
   for (let i = 0; i < lines.length; i++) {
-    const normLine = lines[i].replace(/\b([A-Z])(?:\s+([A-Z])){2,}\b/g, (m) => m.replace(/\s+/g, ""));
-    if (!totalLabelRe.test(normLine)) continue;
-
-    // Check same line first, then next 2 lines
+    if (!labelRe.test(lines[i])) continue;
     for (let offset = 0; offset <= 2; offset++) {
       const target = lines[i + offset];
       if (!target) break;
       const m = target.match(amountRe);
       if (m) {
-        const value = parseFloat(m[1].replace(/,/g, ""));
-        // Sanity check: plausible receipt total ($0.01 – $9,999)
-        if (value > 0 && value < 10000) return value;
+        const v = parseAmount(m[1]);
+        if (v > 0 && v < 99999) return v;
       }
     }
   }
 
-  // Last resort: find the largest dollar amount on the page
-  // (total is usually the biggest number on a receipt)
-  const allAmounts = [...normalised.matchAll(/\$([\d,]+\.\d{2})/g)]
-    .map((m) => parseFloat(m[1].replace(/,/g, "")))
-    .filter((v) => v > 0 && v < 10000);
+  // ── Tier 4: Last resort — largest dollar amount on the page ───────────────
+  // Works for simple email receipts where the total is the only prominently
+  // displayed amount (e.g. "Your total is $12.50" in a PayPal notification)
+  const allAmounts = [...norm.matchAll(/\$?([\d,]+\.\d{2})/g)]
+    .map((m) => parseAmount(m[1]))
+    .filter((v) => v > 0 && v < 99999);
   if (allAmounts.length > 0) return Math.max(...allAmounts);
 
   return null;
@@ -120,7 +176,7 @@ export function extractTotal(text: string): number | null {
 
 /**
  * Extract merchant/store name from OCR text.
- * Receipts almost always print the store name in the first 1-3 lines.
+ * Handles both paper receipts and email/digital receipts.
  */
 export function extractMerchant(text: string): string {
   const lines = text
@@ -128,19 +184,37 @@ export function extractMerchant(text: string): string {
     .map((l) => l.trim())
     .filter((l) => l.length > 2);
 
-  // Skip very short lines and lines that look like addresses (numbers + street words)
-  const addressPattern = /\d{2,}\s+(st|ave|blvd|rd|dr|ln|way|ct|street|avenue|road)/i;
-  const phonePattern = /[\d\-().]{7,}/;
+  // ── Email receipt: look for "From: Merchant Name" or "receipt from X" ──────
+  for (const line of lines.slice(0, 15)) {
+    // "From: Amazon.com" or "From: Uber Receipts"
+    const fromMatch = line.match(/^from\s*[:\-]\s*(.+)/i);
+    if (fromMatch) return fromMatch[1].replace(/<[^>]+>/g, "").trim();
 
-  for (const line of lines.slice(0, 5)) {
-    if (addressPattern.test(line)) continue;
-    if (phonePattern.test(line)) continue;
-    if (/^(receipt|welcome|thank you|store)/i.test(line)) continue;
-    // Likely the merchant name
+    // "Your receipt from Starbucks"
+    const receiptFromMatch = line.match(/receipt\s+from\s+(.+)/i);
+    if (receiptFromMatch) return receiptFromMatch[1].trim();
+
+    // "Thank you for your [order/purchase] at/from/with X"
+    const thankMatch = line.match(/(?:order|purchase|shopping)\s+(?:at|from|with)\s+(.+)/i);
+    if (thankMatch) return thankMatch[1].trim();
+  }
+
+  // ── Paper receipt: store name is typically in the first few lines ──────────
+  const skipRe = /^(receipt|welcome|thank|store\s*#|invoice|order\s*#|date|time|tel|phone|www\.|http|cashier|server|table|guest)/i;
+  const addressRe = /\d{2,}\s+(st|ave|blvd|rd|dr|ln|way|ct|street|avenue|road)/i;
+  const phoneRe = /[\d\-().]{7,}/;
+  const numberOnlyRe = /^[\d\s\-#]+$/;
+
+  for (const line of lines.slice(0, 8)) {
+    if (skipRe.test(line)) continue;
+    if (addressRe.test(line)) continue;
+    if (phoneRe.test(line)) continue;
+    if (numberOnlyRe.test(line)) continue;
+    if (line.length < 3) continue;
     return line;
   }
 
-  return lines[0] ?? "Unknown Store";
+  return lines[0] ?? "Unknown";
 }
 
 /**
