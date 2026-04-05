@@ -175,6 +175,81 @@ export function extractTotal(text: string): number | null {
 }
 
 /**
+ * Extract date from OCR text.
+ * Returns YYYY-MM-DD string, or null if not found.
+ *
+ * Handles:
+ *   Labeled:  "Date: 04/05/2026"  "Order Date: April 5, 2026"
+ *   ISO:      "2026-04-05"
+ *   US:       "04/05/2026"  "04-05-2026"  "04.05.2026"
+ *   Long:     "April 5, 2026"  "Apr 5 2026"  "5 April 2026"
+ *   Short yr: "04/05/26"
+ */
+export function extractDate(text: string): string | null {
+  const lines = text.split("\n").map((l) => l.trim());
+
+  const MONTH_MAP: Record<string, string> = {
+    jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
+    jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
+  };
+  const MONTH_NAMES = "jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?";
+
+  function toISO(year: string, month: string, day: string): string | null {
+    const y = year.length === 2 ? `20${year}` : year;
+    const m = month.padStart(2, "0");
+    const d = day.padStart(2, "0");
+    if (isNaN(Date.parse(`${y}-${m}-${d}`))) return null;
+    return `${y}-${m}-${d}`;
+  }
+
+  function tryParse(s: string): string | null {
+    let m: RegExpMatchArray | null;
+
+    // ISO: 2026-04-05
+    m = s.match(/\b(20\d{2})[-\/](0?[1-9]|1[0-2])[-\/](0?[1-9]|[12]\d|3[01])\b/);
+    if (m) return toISO(m[1], m[2], m[3]);
+
+    // US: MM/DD/YYYY or MM-DD-YYYY or MM.DD.YYYY (short or long year)
+    m = s.match(/\b(0?[1-9]|1[0-2])[\/\-\.](0?[1-9]|[12]\d|3[01])[\/\-\.](20\d{2}|\d{2})\b/);
+    if (m) return toISO(m[3], m[1], m[2]);
+
+    // "April 5, 2026" or "Apr 5 2026" or "April 5th, 2026"
+    m = s.match(new RegExp(`\\b(${MONTH_NAMES})[.\\s,]+(\\d{1,2})(?:st|nd|rd|th)?[,\\s]+(20\\d{2})\\b`, "i"));
+    if (m) {
+      const mon = MONTH_MAP[m[1].toLowerCase().slice(0, 3)];
+      if (mon) return toISO(m[m.length - 1], mon, m[m.length - 2]);
+    }
+
+    // "5 April 2026" or "5th April 2026"
+    m = s.match(new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)?[.\\s]+(${MONTH_NAMES})[.\\s,]+(20\\d{2})\\b`, "i"));
+    if (m) {
+      const mon = MONTH_MAP[m[2].toLowerCase().slice(0, 3)];
+      if (mon) return toISO(m[m.length - 1], mon, m[1]);
+    }
+
+    return null;
+  }
+
+  // Tier 1: labeled date lines ("Date: ...", "Order Date: ...")
+  const labelRe = /^(?:date|purchase\s+date|transaction\s+date|order\s+date|invoice\s+date|receipt\s+date|sale\s+date|visit\s+date|posted|billing\s+date)\s*[:\-]\s*(.+)/i;
+  for (const line of lines) {
+    const lm = line.match(labelRe);
+    if (lm) {
+      const result = tryParse(lm[1]);
+      if (result) return result;
+    }
+  }
+
+  // Tier 2: scan every line for any recognisable date pattern
+  for (const line of lines) {
+    const result = tryParse(line);
+    if (result) return result;
+  }
+
+  return null;
+}
+
+/**
  * Extract merchant/store name from OCR text.
  * Handles both paper receipts and email/digital receipts.
  */
@@ -226,7 +301,7 @@ export async function parseReceipt(base64Image: string): Promise<ParsedReceipt> 
   const amount = extractTotal(rawText);
   const description = extractMerchant(rawText);
   const category = classifyMerchant(description);
-  const date = new Date().toISOString().split("T")[0]; // today's date, user can correct
+  const date = extractDate(rawText) ?? new Date().toISOString().split("T")[0];
 
   if (amount === null) {
     throw new Error("Could not detect a total amount on this receipt");
