@@ -47,48 +47,73 @@ export async function ocrReceiptImage(base64Image: string): Promise<string> {
 
 /**
  * Extract total amount from OCR text.
- * Handles patterns like:
+ * Handles many real-world receipt formats:
  *   TOTAL         $42.17
  *   Total:        42.17
+ *   TOTAL - $58.99
+ *   TOTAL.....$12.00
  *   AMOUNT DUE    $123.00
  *   BALANCE DUE   $58.99
+ *   Total Amount Due: $9.75
+ *   Sale Total    8.49
+ *   T O T A L     15.00   (spaced letters)
  */
 export function extractTotal(text: string): number | null {
   const lines = text.split("\n").map((l) => l.trim());
 
+  // Normalise spaced letters like "T O T A L" → "TOTAL"
+  const normalised = text.replace(/\b([A-Z])(?:\s+([A-Z])){2,}\b/g, (m) =>
+    m.replace(/\s+/g, "")
+  );
+
+  // Separator between label and amount: spaces, dashes, dots, colons, or any combo
+  const sep = "[\\s\\-.:_*]+";
+
   // Priority patterns — most specific first
   const totalPatterns = [
-    /(?:grand\s+total|total\s+due|amount\s+due|balance\s+due|total\s+amount)[^\d]*\$?([\d,]+\.\d{2})/i,
-    /\btotal\b[^\d]*\$?([\d,]+\.\d{2})/i,
-    /\bbalance\b[^\d]*\$?([\d,]+\.\d{2})/i,
+    new RegExp(`(?:grand\\s+total|total\\s+due|amount\\s+due|balance\\s+due|total\\s+amount(?:\\s+due)?)${sep}\\$?([\\d,]+\\.\\d{2})`, "i"),
+    new RegExp(`(?:sale\\s+total|subtotal\\s+due|net\\s+total)${sep}\\$?([\\d,]+\\.\\d{2})`, "i"),
+    new RegExp(`\\btotal\\b${sep}\\$?([\\d,]+\\.\\d{2})`, "i"),
+    new RegExp(`\\bbalance\\b${sep}\\$?([\\d,]+\\.\\d{2})`, "i"),
+    new RegExp(`\\bamount\\b${sep}\\$?([\\d,]+\\.\\d{2})`, "i"),
   ];
 
-  // First try full-text patterns
+  // Try normalised full-text patterns
   for (const pattern of totalPatterns) {
-    const match = text.match(pattern);
+    const match = normalised.match(pattern);
     if (match) {
-      const value = parseFloat(match[1].replace(",", ""));
+      const value = parseFloat(match[1].replace(/,/g, ""));
       if (value > 0) return value;
     }
   }
 
-  // Then scan line by line — look for TOTAL label followed by a dollar amount on the same or next line
+  // Line-by-line scan — label on one line, amount on same line or up to 2 lines below
+  const totalLabelRe = /\b(grand\s+total|total\s+due|amount\s+due|balance\s+due|total\s+amount|sale\s+total|total|balance|amount\s+paid)\b/i;
+  const amountRe = /\$?([\d,]+\.\d{2})/;
+
   for (let i = 0; i < lines.length; i++) {
-    if (/\b(total|balance due|amount due)\b/i.test(lines[i])) {
-      // Dollar amount on same line
-      const sameLineMatch = lines[i].match(/\$?([\d,]+\.\d{2})/);
-      if (sameLineMatch) {
-        return parseFloat(sameLineMatch[1].replace(",", ""));
-      }
-      // Dollar amount on next line
-      if (i + 1 < lines.length) {
-        const nextLineMatch = lines[i + 1].match(/\$?([\d,]+\.\d{2})/);
-        if (nextLineMatch) {
-          return parseFloat(nextLineMatch[1].replace(",", ""));
-        }
+    const normLine = lines[i].replace(/\b([A-Z])(?:\s+([A-Z])){2,}\b/g, (m) => m.replace(/\s+/g, ""));
+    if (!totalLabelRe.test(normLine)) continue;
+
+    // Check same line first, then next 2 lines
+    for (let offset = 0; offset <= 2; offset++) {
+      const target = lines[i + offset];
+      if (!target) break;
+      const m = target.match(amountRe);
+      if (m) {
+        const value = parseFloat(m[1].replace(/,/g, ""));
+        // Sanity check: plausible receipt total ($0.01 – $9,999)
+        if (value > 0 && value < 10000) return value;
       }
     }
   }
+
+  // Last resort: find the largest dollar amount on the page
+  // (total is usually the biggest number on a receipt)
+  const allAmounts = [...normalised.matchAll(/\$([\d,]+\.\d{2})/g)]
+    .map((m) => parseFloat(m[1].replace(/,/g, "")))
+    .filter((v) => v > 0 && v < 10000);
+  if (allAmounts.length > 0) return Math.max(...allAmounts);
 
   return null;
 }
