@@ -18,6 +18,8 @@ export default function ReceiptScanner() {
   const [preview, setPreview] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<ReceiptData | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
+  const [setupStatus, setSetupStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
+  const [setupMsg, setSetupMsg] = useState("");
 
   // ── Step 1: User picks / captures an image ────────────────────────────────
   function handleImageSelect(e: React.ChangeEvent<HTMLInputElement>) {
@@ -78,6 +80,31 @@ export default function ReceiptScanner() {
     }
   }
 
+  // ── Setup: copy last month's sheet → new month ──────────────────────────
+  async function setupMonth() {
+    setSetupStatus("loading");
+    setSetupMsg("");
+    try {
+      const res = await fetch("/api/setup-month", {
+        method: "POST",
+        headers: {
+          "x-setup-secret": process.env.NEXT_PUBLIC_SETUP_SECRET ?? "",
+        },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Setup failed");
+      setSetupMsg(
+        data.status === "already_exists"
+          ? `"${data.name}" already exists — you're all set!`
+          : `Created "${data.name}" and shared it to your Drive.`
+      );
+      setSetupStatus("done");
+    } catch (err: unknown) {
+      setSetupMsg(err instanceof Error ? err.message : "Setup failed");
+      setSetupStatus("error");
+    }
+  }
+
   function reset() {
     setStep("capture");
     setPreview(null);
@@ -111,6 +138,23 @@ export default function ReceiptScanner() {
           <p className="text-center text-xs text-gray-400">
             Opens camera on mobile · or choose from gallery
           </p>
+
+          {/* Monthly sheet setup */}
+          <div className="border-t border-gray-200 pt-4 flex flex-col gap-2">
+            <button
+              onClick={setupMonth}
+              disabled={setupStatus === "loading"}
+              className="w-full py-3 rounded-xl border border-blue-300 text-blue-600 text-sm font-medium active:scale-95 transition-transform disabled:opacity-50"
+            >
+              {setupStatus === "loading" ? "Setting up…" : "🗓 Setup This Month's Sheet"}
+            </button>
+            {setupStatus === "done" && (
+              <p className="text-center text-xs text-green-600">{setupMsg}</p>
+            )}
+            {setupStatus === "error" && (
+              <p className="text-center text-xs text-red-500">{setupMsg}</p>
+            )}
+          </div>
         </div>
       )}
 

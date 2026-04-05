@@ -11,6 +11,10 @@ export const runtime = "nodejs";
  * Appends one row to the Transactions sheet.
  */
 export async function POST(req: NextRequest) {
+  if (!req.headers.get("content-type")?.includes("application/json")) {
+    return NextResponse.json({ error: "Content-Type must be application/json" }, { status: 415 });
+  }
+
   try {
     const body = await req.json();
     const { date, amount, description, category } = body as Partial<ParsedReceipt>;
@@ -19,11 +23,11 @@ export async function POST(req: NextRequest) {
     if (!date || typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return NextResponse.json({ error: "Invalid or missing date (expected YYYY-MM-DD)" }, { status: 400 });
     }
-    if (typeof amount !== "number" || amount <= 0) {
-      return NextResponse.json({ error: "Invalid or missing amount" }, { status: 400 });
+    if (typeof amount !== "number" || amount <= 0 || amount > 99_999.99) {
+      return NextResponse.json({ error: "Amount must be between $0.01 and $99,999.99" }, { status: 400 });
     }
-    if (!description || typeof description !== "string") {
-      return NextResponse.json({ error: "Invalid or missing description" }, { status: 400 });
+    if (!description || typeof description !== "string" || description.trim() === "" || description.length > 500) {
+      return NextResponse.json({ error: "Invalid or missing description (max 500 chars)" }, { status: 400 });
     }
     if (!category || !EXPENSE_CATEGORIES.includes(category as ExpenseCategory)) {
       return NextResponse.json(
