@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { EXPENSE_CATEGORIES, ExpenseCategory } from "@/lib/categories";
 
 type Step = "capture" | "scanning" | "confirm" | "saving" | "done" | "error";
+type Mode = "scan" | "manual";
 
 interface ReceiptData {
   date: string;
@@ -15,6 +16,7 @@ interface ReceiptData {
 export default function ReceiptScanner() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [step, setStep] = useState<Step>("capture");
+  const [mode, setMode] = useState<Mode>("scan");
   const [preview, setPreview] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<ReceiptData | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
@@ -105,8 +107,22 @@ export default function ReceiptScanner() {
     }
   }
 
+  // ── Manual entry: skip scan, go straight to confirm form ────────────────
+  function startManualEntry() {
+    setMode("manual");
+    setPreview(null);
+    setReceipt({
+      date: new Date().toISOString().split("T")[0],
+      amount: 0,
+      description: "",
+      category: "Personal",
+    });
+    setStep("confirm");
+  }
+
   function reset() {
     setStep("capture");
+    setMode("scan");
     setPreview(null);
     setReceipt(null);
     setErrorMsg("");
@@ -121,6 +137,30 @@ export default function ReceiptScanner() {
       {/* CAPTURE */}
       {step === "capture" && (
         <div className="w-full max-w-sm flex flex-col gap-4">
+          {/* Mode tabs */}
+          <div className="flex rounded-xl overflow-hidden border border-gray-200 shadow-sm">
+            <button
+              onClick={() => setMode("scan")}
+              className={`flex-1 py-3 text-sm font-semibold transition-colors ${
+                mode === "scan"
+                  ? "bg-blue-600 text-white"
+                  : "bg-white text-gray-500 hover:bg-gray-50"
+              }`}
+            >
+              📷 Scan Receipt
+            </button>
+            <button
+              onClick={startManualEntry}
+              className={`flex-1 py-3 text-sm font-semibold transition-colors ${
+                mode === "manual"
+                  ? "bg-blue-600 text-white"
+                  : "bg-white text-gray-500 hover:bg-gray-50"
+              }`}
+            >
+              ✏️ Enter Manually
+            </button>
+          </div>
+
           <button
             onClick={() => fileInputRef.current?.click()}
             className="w-full py-5 rounded-2xl bg-blue-600 text-white text-lg font-semibold shadow-md active:scale-95 transition-transform"
@@ -179,7 +219,9 @@ export default function ReceiptScanner() {
           {preview && (
             <img src={preview} alt="Receipt preview" className="w-full max-h-40 object-cover rounded-xl" />
           )}
-          <h2 className="text-lg font-semibold text-gray-700">Review &amp; Confirm</h2>
+          <h2 className="text-lg font-semibold text-gray-700">
+            {mode === "manual" ? "Manual Entry" : "Review & Confirm"}
+          </h2>
 
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Date</span>
@@ -264,7 +306,7 @@ export default function ReceiptScanner() {
             onClick={reset}
             className="w-full py-4 rounded-2xl bg-blue-600 text-white font-semibold shadow-md active:scale-95 transition-transform"
           >
-            Scan Another Receipt
+            {mode === "manual" ? "Add Another Entry" : "Scan Another Receipt"}
           </button>
         </div>
       )}
