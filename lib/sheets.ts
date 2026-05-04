@@ -57,9 +57,12 @@ async function resolveSpreadsheetId(
   const monthFilters = monthTokens.map(
     (tok) => `name contains '${tok}_${year}'`
   );
+  // Accept both native Google Sheets AND uploaded Excel (.xlsx) files
   const query =
     `(${monthFilters.join(" or ")}) and ` +
-    `mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false`;
+    `(mimeType = 'application/vnd.google-apps.spreadsheet' or ` +
+    ` mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') and ` +
+    `trashed = false`;
 
   const drive = google.drive({ version: "v3", auth });
   const res = await drive.files.list({
