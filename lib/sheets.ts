@@ -48,36 +48,42 @@ async function resolveSpreadsheetId(
   if (cachedMap[cacheKey]) return cachedMap[cacheKey];
 
   const idx = parseInt(month) - 1;
-  const nameCandidates = [
-    `Monthly Budget_${MONTH_ABBR[idx]}_${year}`,
-    `Monthly budget_${MONTH_ABBR[idx]}_${year}`,
-    `Monthly Budget_${MONTH_FULL[idx]}_${year}`,
-    `Monthly budget_${MONTH_FULL[idx]}_${year}`,
-  ];
 
-  // Build Drive query: name = 'X' or name = 'Y' ...
-  const nameFilters = nameCandidates
-    .map((n) => `name = '${n}'`)
-    .join(" or ");
-  const query = `(${nameFilters}) and mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false`;
+  // Search broadly using "contains" so minor typos (e.g. "Budge" vs "Budget")
+  // and abbreviation vs full month name are all tolerated.
+  // We search for files whose name contains the month token AND the year,
+  // then client-side filter for ones that also contain "budget" (case-insensitive).
+  const monthTokens = [MONTH_ABBR[idx], MONTH_FULL[idx]];
+  const monthFilters = monthTokens.map(
+    (tok) => `name contains '${tok}_${year}'`
+  );
+  const query =
+    `(${monthFilters.join(" or ")}) and ` +
+    `mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false`;
 
   const drive = google.drive({ version: "v3", auth });
   const res = await drive.files.list({
     q: query,
     fields: "files(id, name)",
-    pageSize: 5,
+    pageSize: 10,
   });
 
-  const files = res.data.files ?? [];
+  const allFiles = res.data.files ?? [];
+  // Prefer files that contain "budget" in their name (case-insensitive)
+  const files =
+    allFiles.filter((f) => /budget/i.test(f.name ?? "")).length > 0
+      ? allFiles.filter((f) => /budget/i.test(f.name ?? ""))
+      : allFiles;
+
   if (files.length === 0) {
+    const example = `Monthly Budget_${MONTH_ABBR[idx]}_${year}`;
     throw new Error(
       `No spreadsheet found for ${MONTH_ABBR[idx]} ${year}. ` +
-      `Expected a name like "${nameCandidates[0]}". ` +
+      `Expected a name like "${example}". ` +
       `Make sure it's shared with ${process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL}`
     );
   }
 
-  // Prefer exact match order; Drive query is case-sensitive so first result is fine
   const resolvedId = files[0].id!;
   const cache = readCache();
   cache[cacheKey] = resolvedId;
