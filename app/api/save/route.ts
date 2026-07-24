@@ -36,7 +36,15 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    await appendToSheet({ date, amount, description, category: category as ExpenseCategory, rawText: "" });
+    await appendToSheet({
+      date,
+      amount,
+      description,
+      category: category as ExpenseCategory,
+      rawText: "",
+      amountCandidates: [amount],
+      needsAmount: false,
+    });
     return NextResponse.json({ success: true }, { status: 200 });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Save failed";

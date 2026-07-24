@@ -2,10 +2,14 @@ import { classifyMerchant, ExpenseCategory } from "./categories";
 
 export interface ParsedReceipt {
   date: string;           // YYYY-MM-DD
-  amount: number;         // numeric total
+  amount: number;         // numeric total (0 if undetected)
   description: string;    // merchant / store name
   category: ExpenseCategory;
   rawText: string;        // full OCR text for debugging
+  /** Distinct amount candidates, preferred first. Empty if none found. */
+  amountCandidates: number[];
+  /** True when OCR ran but no confident total was found. */
+  needsAmount: boolean;
 }
 
 /**
@@ -71,39 +75,24 @@ function parseAmount(raw: string): number {
   return parseFloat(cleaned);
 }
 
+function pushUnique(list: number[], value: number) {
+  if (!list.includes(value)) list.push(value);
+}
+
 /**
- * Extract total amount from OCR text.
- *
- * Handles paper receipts AND digital/email receipts:
- *
- * Paper:
- *   TOTAL $42.17 | TOTAL - $58.99 | TOTAL.....12.00 | T O T A L 15.00
- *   AMOUNT DUE $123.00 | BALANCE DUE $58.99 | GRAND TOTAL $9.75
- *
- * Email / digital (Amazon, Uber, DoorDash, PayPal, etc.):
- *   Order Total: $42.17
- *   Total Charged: $38.00
- *   Charged to your card: $15.74
- *   You were charged $29.99
- *   Payment of $12.50
- *   Transaction Total $99.00
- *   Amount Charged $7.49
- *   Total Payment: $55.00
- *   Charge: $18.25
+ * Collect amount candidates from OCR text (preferred first).
+ * Used for disambiguation when multiple plausible totals appear.
  */
-export function extractTotal(text: string): number | null {
+export function extractAmountCandidates(text: string): number[] {
   const norm = normaliseText(text);
   const lines = norm.split("\n").map((l) => l.trim());
+  const preferred: number[] = [];
+  const secondary: number[] = [];
 
-  // Separator: any combo of spaces, dashes, dots, colons, pipes
   const sep = "[\\s\\-.:_*|]+";
-  // Amount pattern: optional $, digits with optional comma grouping, decimal
   const amt = "\\$?([\\d,]+\\.\\d{2})";
 
-  // ── Tier 1: High-confidence specific patterns ──────────────────────────────
-  // Order matters: most specific first to avoid false positives
   const tier1 = [
-    // Email receipt patterns
     `(?:order|transaction|invoice)\\s+total${sep}${amt}`,
     `total\\s+(?:charged|billed|payment|amount|due|cost)${sep}${amt}`,
     `(?:amount|total)\\s+charged${sep}${amt}`,
@@ -112,7 +101,6 @@ export function extractTotal(text: string): number | null {
     `payment\\s+(?:of|total|amount)${sep}${amt}`,
     `total\\s+payment${sep}${amt}`,
     `amount\\s+paid${sep}${amt}`,
-    // Paper receipt patterns
     `grand\\s+total${sep}${amt}`,
     `total\\s+due${sep}${amt}`,
     `amount\\s+due${sep}${amt}`,
@@ -127,11 +115,10 @@ export function extractTotal(text: string): number | null {
     const m = norm.match(new RegExp(pattern, "i"));
     if (m) {
       const v = parseAmount(m[1]);
-      if (v > 0 && v < 99999) return v;
+      if (v > 0 && v < 99999) pushUnique(preferred, v);
     }
   }
 
-  // ── Tier 2: Generic "total" and "charge" labels ────────────────────────────
   const tier2 = [
     `\\btotal\\b${sep}${amt}`,
     `\\bcharge\\b${sep}${amt}`,
@@ -142,12 +129,12 @@ export function extractTotal(text: string): number | null {
     const m = norm.match(new RegExp(pattern, "i"));
     if (m) {
       const v = parseAmount(m[1]);
-      if (v > 0 && v < 99999) return v;
+      if (v > 0 && v < 99999) pushUnique(preferred, v);
     }
   }
 
-  // ── Tier 3: Line-by-line — label on one line, amount up to 2 lines below ──
-  const labelRe = /\b(grand\s+total|order\s+total|total\s+charged|total\s+due|amount\s+due|balance\s+due|total\s+amount|sale\s+total|total\s+payment|amount\s+paid|total|balance|charge)\b/i;
+  const labelRe =
+    /\b(grand\s+total|order\s+total|total\s+charged|total\s+due|amount\s+due|balance\s+due|total\s+amount|sale\s+total|total\s+payment|amount\s+paid|total|balance|charge)\b/i;
   const amountRe = /\$?([\d,]+\.\d{2})/;
 
   for (let i = 0; i < lines.length; i++) {
@@ -158,20 +145,30 @@ export function extractTotal(text: string): number | null {
       const m = target.match(amountRe);
       if (m) {
         const v = parseAmount(m[1]);
-        if (v > 0 && v < 99999) return v;
+        if (v > 0 && v < 99999) pushUnique(preferred, v);
       }
     }
   }
 
-  // ── Tier 4: Last resort — largest dollar amount on the page ───────────────
-  // Works for simple email receipts where the total is the only prominently
-  // displayed amount (e.g. "Your total is $12.50" in a PayPal notification)
   const allAmounts = [...norm.matchAll(/\$?([\d,]+\.\d{2})/g)]
     .map((m) => parseAmount(m[1]))
-    .filter((v) => v > 0 && v < 99999);
-  if (allAmounts.length > 0) return Math.max(...allAmounts);
+    .filter((v) => v > 0 && v < 99999)
+    .sort((a, b) => b - a);
 
-  return null;
+  for (const v of allAmounts) pushUnique(secondary, v);
+
+  const merged: number[] = [];
+  for (const v of preferred) pushUnique(merged, v);
+  for (const v of secondary) pushUnique(merged, v);
+  return merged.slice(0, 6);
+}
+
+/**
+ * Extract the best single total from OCR text, or null if none found.
+ */
+export function extractTotal(text: string): number | null {
+  const candidates = extractAmountCandidates(text);
+  return candidates[0] ?? null;
 }
 
 /**
@@ -294,18 +291,24 @@ export function extractMerchant(text: string): string {
 
 /**
  * Full pipeline: base64 image → ParsedReceipt
+ * Does not throw when amount is missing — sets needsAmount and returns candidates.
  */
 export async function parseReceipt(base64Image: string): Promise<ParsedReceipt> {
   const rawText = await ocrReceiptImage(base64Image);
 
-  const amount = extractTotal(rawText);
+  const amountCandidates = extractAmountCandidates(rawText);
+  const amount = amountCandidates[0] ?? 0;
   const description = extractMerchant(rawText);
   const category = classifyMerchant(description);
   const date = extractDate(rawText) ?? new Date().toISOString().split("T")[0];
 
-  if (amount === null) {
-    throw new Error("Could not detect a total amount on this receipt");
-  }
-
-  return { date, amount, description, category, rawText };
+  return {
+    date,
+    amount,
+    description,
+    category,
+    rawText,
+    amountCandidates,
+    needsAmount: amountCandidates.length === 0,
+  };
 }
