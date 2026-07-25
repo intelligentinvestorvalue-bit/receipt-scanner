@@ -4,6 +4,8 @@ import { useRef, useState } from "react";
 import { EXPENSE_CATEGORIES, ExpenseCategory } from "@/lib/categories";
 import { logout } from "@/app/actions/auth";
 import { setupMonthAction } from "@/app/actions/setup";
+import { ocrImageClient, prepareImageForOcr } from "@/lib/client-ocr";
+import { parseReceiptText } from "@/lib/ocr";
 
 type Step = "capture" | "scanning" | "confirm" | "saving" | "done" | "error";
 type Mode = "scan" | "manual";
@@ -25,6 +27,8 @@ export default function ReceiptScanner() {
   const [amountCandidates, setAmountCandidates] = useState<number[]>([]);
   const [clientError, setClientError] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
+  const [ocrProgress, setOcrProgress] = useState(0);
+  const [ocrStatus, setOcrStatus] = useState("Starting OCR…");
   const [setupStatus, setSetupStatus] = useState<"idle" | "loading" | "done" | "error">("idle");
   const [setupMsg, setSetupMsg] = useState("");
 
@@ -54,44 +58,24 @@ export default function ReceiptScanner() {
     setErrorMsg("");
     setClientError("");
     setAmountCandidates([]);
+    setOcrProgress(0);
+    setOcrStatus("Preparing image…");
     try {
-      const res = await fetch("/api/scan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: dataUrl }),
+      const prepared = await prepareImageForOcr(dataUrl);
+      setOcrStatus("Reading receipt…");
+      const rawText = await ocrImageClient(prepared, (progress, status) => {
+        setOcrProgress(Math.round(progress * 100));
+        if (status) setOcrStatus(status.replace(/_/g, " "));
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        if (res.status === 429) {
-          throw new Error(data.error ?? "Rate limit reached — try again later");
-        }
-        // Soft-fail into manual entry with whatever we know
-        setMode("manual");
-        setReceipt({
-          date: todayISO(),
-          amount: 0,
-          description: "",
-          category: "Personal",
-        });
-        setAmountCandidates([]);
-        setErrorMsg(data.error ?? "Scan failed");
-        setStep("error");
-        return;
-      }
 
-      const candidates: number[] = Array.isArray(data.amountCandidates)
-        ? data.amountCandidates
-        : data.amount
-          ? [data.amount]
-          : [];
-
+      const parsed = parseReceiptText(rawText);
       setReceipt({
-        date: data.date ?? todayISO(),
-        amount: typeof data.amount === "number" ? data.amount : 0,
-        description: data.description ?? "",
-        category: (data.category as ExpenseCategory) ?? "Personal",
+        date: parsed.date,
+        amount: parsed.amount,
+        description: parsed.description,
+        category: parsed.category,
       });
-      setAmountCandidates(candidates);
+      setAmountCandidates(parsed.amountCandidates);
       setMode("scan");
       setStep("confirm");
     } catch (err: unknown) {
@@ -296,7 +280,7 @@ export default function ReceiptScanner() {
 
       {/* SCANNING */}
       {step === "scanning" && (
-        <div className="flex flex-col items-center gap-4 mt-8" aria-live="polite">
+        <div className="flex flex-col items-center gap-4 mt-8 w-full max-w-sm" aria-live="polite">
           {preview && (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={preview} alt="Receipt preview" className="w-48 rounded-xl shadow object-cover" />
@@ -306,8 +290,17 @@ export default function ReceiptScanner() {
               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
             </svg>
-            Reading receipt…
+            {ocrStatus}
           </div>
+          <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+            <div
+              className="bg-blue-600 h-2 transition-all duration-200"
+              style={{ width: `${Math.max(ocrProgress, 4)}%` }}
+            />
+          </div>
+          <p className="text-xs text-gray-500">
+            {ocrProgress}% · runs on your device (no Google Vision)
+          </p>
         </div>
       )}
 

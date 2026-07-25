@@ -13,43 +13,6 @@ export interface ParsedReceipt {
 }
 
 /**
- * Call Google Cloud Vision API to OCR a receipt image (base64).
- * Runs server-side only — API key stays in env vars, never in browser.
- */
-export async function ocrReceiptImage(base64Image: string): Promise<string> {
-  const apiKey = process.env.GOOGLE_VISION_API_KEY;
-  if (!apiKey) throw new Error("GOOGLE_VISION_API_KEY not set");
-
-  const response = await fetch(
-    `https://vision.googleapis.com/v1/images:annotate?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        requests: [
-          {
-            image: { content: base64Image },
-            features: [{ type: "TEXT_DETECTION", maxResults: 1 }],
-          },
-        ],
-      }),
-    }
-  );
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Vision API error: ${err}`);
-  }
-
-  const data = await response.json();
-  const text: string =
-    data?.responses?.[0]?.textAnnotations?.[0]?.description ?? "";
-
-  if (!text) throw new Error("No text detected in image");
-  return text;
-}
-
-/**
  * Normalise raw OCR text before parsing:
  * - Collapse spaced letters "T O T A L" → "TOTAL"
  * - Strip common OCR noise characters
@@ -290,12 +253,11 @@ export function extractMerchant(text: string): string {
 }
 
 /**
- * Full pipeline: base64 image → ParsedReceipt
+ * Parse OCR text into receipt fields.
  * Does not throw when amount is missing — sets needsAmount and returns candidates.
+ * Safe to call from the browser (used after client-side Tesseract OCR).
  */
-export async function parseReceipt(base64Image: string): Promise<ParsedReceipt> {
-  const rawText = await ocrReceiptImage(base64Image);
-
+export function parseReceiptText(rawText: string): ParsedReceipt {
   const amountCandidates = extractAmountCandidates(rawText);
   const amount = amountCandidates[0] ?? 0;
   const description = extractMerchant(rawText);

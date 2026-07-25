@@ -2,20 +2,21 @@
 
 Mobile-first Next.js app that OCR-scans receipts (or accepts manual entry), lets you review the fields, and appends a row to your monthly Google Sheets budget workbook.
 
-**Flow:** Capture / upload → Google Cloud Vision OCR → review & edit → append to `Transactions` on `Monthly Budget_{Mon}_{YYYY}`.
+**Flow:** Capture / upload → **on-device Tesseract.js OCR** → review & edit → append to `Transactions` on `Monthly Budget_{Mon}_{YYYY}`.
+
+OCR runs entirely in the browser. No Google Cloud Vision (and no Vision billing) is required.
 
 ---
 
 ## Features
 
-- Scan receipts with camera or gallery upload
-- Manual entry when you skip OCR
+- Scan receipts with camera or gallery upload (Tesseract.js, on-device)
+- Manual entry when you skip OCR or OCR fails
 - Confirm/edit date, amount, description, and category before save
 - Amount disambiguation when OCR finds multiple totals
 - OCR failure → continue with manual entry
 - Monthly sheet setup (copy last month, clear Transactions)
 - Password-protected UI and APIs
-- Vision API rate limits (950/month, 20/min) with Upstash Redis when configured
 
 ---
 
@@ -37,16 +38,9 @@ See `env.example` for every variable. Minimum required for a working deploy:
 | `APP_PASSWORD` | Login password for the app |
 | `SESSION_SECRET` | ≥32 random chars for signing session cookies |
 | `SETUP_SECRET` | Server-only secret; required for monthly sheet setup |
-| `GOOGLE_VISION_API_KEY` | Cloud Vision OCR |
 | `GOOGLE_SERVICE_ACCOUNT_EMAIL` | Service account email |
 | `GOOGLE_PRIVATE_KEY` | Service account private key (`\n` as literal `\n`) |
 | `GOOGLE_OWNER_EMAIL` | Your Gmail — new month sheets are shared here |
-
-**Strongly recommended:**
-
-| Variable | Purpose |
-|----------|---------|
-| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | Durable Vision rate limits across serverless instances |
 
 **Optional:**
 
@@ -61,12 +55,11 @@ openssl rand -base64 32   # SESSION_SECRET
 openssl rand -base64 24   # SETUP_SECRET / APP_PASSWORD
 ```
 
-### 3. Google Cloud
+### 3. Google Cloud (Sheets + Drive only)
 
-1. Enable **Cloud Vision API**, **Google Sheets API**, and **Google Drive API**.
-2. Create an API key restricted to Vision; put it in `GOOGLE_VISION_API_KEY`.
-3. Create a service account, download the JSON key, and set email + private key.
-4. Share each monthly spreadsheet with the service account email as **Editor**.
+1. Enable **Google Sheets API** and **Google Drive API** (Vision is not needed).
+2. Create a service account, download the JSON key, and set email + private key.
+3. Share each monthly spreadsheet with the service account email as **Editor**.
 
 ### 4. Spreadsheet naming
 
@@ -87,12 +80,14 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) and sign in with `APP_PASSWORD`.
 
+First scan downloads the Tesseract English language model from jsDelivr (cached afterward in the browser).
+
 ### 6. Deploy (Vercel)
 
 1. Push the repo and import into Vercel.
 2. Add all env vars from `.env.local` (keep `GOOGLE_PRIVATE_KEY` with `\n` escapes).
-3. Create a free [Upstash Redis](https://upstash.com/) database and add the REST URL/token.
-4. Deploy. Use the login password — do not leave the app public.
+3. Deploy. Use the login password — do not leave the app public.
+4. You can remove any old `GOOGLE_VISION_API_KEY` / Upstash vars; they are unused.
 
 ---
 
@@ -103,8 +98,17 @@ npm run dev      # local development
 npm run build    # production build
 npm run start    # run production server
 npm run lint     # ESLint
-npm test         # Vitest unit tests (OCR + categories)
+npm test         # Vitest unit tests (OCR parsers + categories)
 ```
+
+---
+
+## OCR notes
+
+- Engine: [Tesseract.js](https://github.com/naptha/tesseract.js) (open source), English (`eng`)
+- Runs on the user's device; receipt images are not sent to Google for OCR
+- Accuracy is usually good on clear, well-lit, flat receipts; blurry or angled photos may need manual correction (the review step is designed for that)
+- Large images are downscaled before OCR for mobile performance
 
 ---
 
@@ -113,8 +117,7 @@ npm test         # Vitest unit tests (OCR + categories)
 - **App password** (`APP_PASSWORD`) + signed HttpOnly cookie (`SESSION_SECRET`)
 - Unauthenticated users are redirected to `/login`; APIs return `401`
 - **Setup** never uses a `NEXT_PUBLIC_*` secret. The UI calls a server action; the API route requires `SETUP_SECRET` and refuses to run if it is unset
-- Vision scan/save routes are session-protected
-- Rate limits prefer Upstash; `/tmp` is only a degraded local fallback
+- Save / setup routes are session-protected (setup API also requires `SETUP_SECRET`)
 
 ---
 

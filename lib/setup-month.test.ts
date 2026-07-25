@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, afterEach } from "vitest";
 import { assertSetupSecret, SetupAuthError } from "@/lib/setup-month";
 
 describe("assertSetupSecret", () => {

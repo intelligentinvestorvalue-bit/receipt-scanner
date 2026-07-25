@@ -4,6 +4,7 @@ import {
   extractDate,
   extractMerchant,
   extractTotal,
+  parseReceiptText,
 } from "@/lib/ocr";
 import { classifyMerchant } from "@/lib/categories";
 
@@ -75,6 +76,31 @@ describe("extractMerchant", () => {
   it("uses first plausible paper receipt line", () => {
     const text = `COSTCO WHOLESALE\n123 Warehouse Rd\nTOTAL 99.00`;
     expect(extractMerchant(text)).toMatch(/COSTCO/i);
+  });
+});
+
+describe("parseReceiptText", () => {
+  it("fills fields from a simple receipt dump", () => {
+    const text = `
+WOODMANS MARKET
+Date: 04/05/2026
+Milk 3.99
+TOTAL $42.17
+Thank you
+`;
+    const parsed = parseReceiptText(text);
+    expect(parsed.amount).toBe(42.17);
+    expect(parsed.date).toBe("2026-04-05");
+    expect(parsed.description).toMatch(/WOODMANS/i);
+    expect(parsed.category).toBe("Woodmans Groceries");
+    expect(parsed.needsAmount).toBe(false);
+    expect(parsed.amountCandidates[0]).toBe(42.17);
+  });
+
+  it("sets needsAmount when no total is found", () => {
+    const parsed = parseReceiptText("Just some store name\nno money here");
+    expect(parsed.needsAmount).toBe(true);
+    expect(parsed.amount).toBe(0);
   });
 });
 
