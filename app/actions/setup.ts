@@ -1,6 +1,5 @@
 "use server";
 
-import { isAuthenticated } from "@/lib/session";
 import { runSetupMonth, SetupAuthError } from "@/lib/setup-month";
 
 export type SetupResult =
@@ -8,14 +7,11 @@ export type SetupResult =
   | { ok: false; error: string };
 
 /**
- * Authenticated UI path for monthly setup. Never exposes SETUP_SECRET to the
- * client — it only verifies the secret is configured server-side (fail closed).
+ * UI path for monthly setup. Never exposes SETUP_SECRET to the client —
+ * it only verifies the secret is configured server-side (fail closed).
+ * Session auth temporarily disabled (public app).
  */
 export async function setupMonthAction(): Promise<SetupResult> {
-  if (!(await isAuthenticated())) {
-    return { ok: false, error: "Unauthorized" };
-  }
-
   if (!process.env.SETUP_SECRET) {
     return {
       ok: false,
