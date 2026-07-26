@@ -101,17 +101,28 @@ function processCardAlertEmails() {
     for (var m = 0; m < messages.length; m++) {
       var msg = messages[m];
       var id = msg.getId();
-      if (existingIds[id]) continue;
+      // Already captured earlier — remove from hub inbox and skip.
+      if (existingIds[id]) {
+        msg.moveToTrash();
+        continue;
+      }
 
       var subject = msg.getSubject() || "";
       var body = msg.getPlainBody() || "";
       var from = msg.getFrom() || "";
       var haystack = (subject + "\n" + body).toLowerCase();
 
-      if (!looksLikeCharge_(haystack)) continue;
+      // Labeled but not a usable charge — clear it from the hub inbox.
+      if (!looksLikeCharge_(haystack)) {
+        msg.moveToTrash();
+        continue;
+      }
 
       var amount = extractAmount_(subject + "\n" + body);
-      if (!amount) continue;
+      if (!amount) {
+        msg.moveToTrash();
+        continue;
+      }
 
       var merchant = extractMerchant_(subject, body, from);
       var dateIso = Utilities.formatDate(
@@ -135,6 +146,8 @@ function processCardAlertEmails() {
       ]);
 
       existingIds[id] = true;
+      // Remove from hub Gmail after it's safely on the Pending tab (Trash; not permanent).
+      msg.moveToTrash();
     }
   }
 }

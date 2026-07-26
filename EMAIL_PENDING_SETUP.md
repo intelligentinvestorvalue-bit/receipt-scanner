@@ -44,6 +44,8 @@ Google does **not** let the service account authorize **your** Gmail inbox. You 
 3. Run **`processCardAlertEmails`** → Allow Gmail + Sheets + Drive permissions
 4. **Triggers** → time-driven every 10–15 minutes
 
+After processing, the script moves the hub message to **Trash** (not permanent delete): charge emails after they’re written to **Pending**, and labeled emails with no usable amount so they don’t clutter the hub inbox.
+
 When the new month’s budget sheet appears, the script looks it up by name automatically — you do **not** need to re-paste the sheet ID each month. Still create/share the new monthly file with the service account (or use **Setup This Month's Sheet**).
 
 ---
