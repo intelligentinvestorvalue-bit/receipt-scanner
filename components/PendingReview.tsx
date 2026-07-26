@@ -18,6 +18,13 @@ interface PendingItem {
   snippet: string;
 }
 
+interface ScriptInstall {
+  attempted: boolean;
+  ok: boolean;
+  scriptId?: string;
+  message: string;
+}
+
 type Draft = {
   date: string;
   amount: number;
@@ -44,6 +51,12 @@ export default function PendingReview() {
   const [error, setError] = useState("");
   const [busyRow, setBusyRow] = useState<number | null>(null);
   const [actionError, setActionError] = useState("");
+  const [spreadsheetUrl, setSpreadsheetUrl] = useState("");
+  const [created, setCreated] = useState(false);
+  const [script, setScript] = useState("");
+  const [scriptInstall, setScriptInstall] = useState<ScriptInstall | null>(null);
+  const [showScript, setShowScript] = useState(false);
+  const [copyStatus, setCopyStatus] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -57,6 +70,13 @@ export default function PendingReview() {
       const next: Record<number, Draft> = {};
       for (const item of list) next[item.rowNumber] = toDraft(item);
       setDrafts(next);
+      setSpreadsheetUrl(data.spreadsheetUrl ?? "");
+      setCreated(Boolean(data.created));
+      setScript(typeof data.script === "string" ? data.script : "");
+      setScriptInstall(data.scriptInstall ?? null);
+      if (data.created || data.scriptInstall?.ok === false) {
+        setShowScript(true);
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to load");
       setItems([]);
@@ -68,6 +88,16 @@ export default function PendingReview() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  async function copyScript() {
+    if (!script) return;
+    try {
+      await navigator.clipboard.writeText(script);
+      setCopyStatus("Copied — paste into Extensions → Apps Script");
+    } catch {
+      setCopyStatus("Copy failed — select the script text manually");
+    }
+  }
 
   function updateDraft(rowNumber: number, patch: Partial<Draft>) {
     setDrafts((prev) => ({
@@ -149,9 +179,76 @@ export default function PendingReview() {
       </div>
 
       <div className="w-full max-w-lg flex flex-col gap-4">
+        {!loading && !error && spreadsheetUrl && (
+          <section className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 flex flex-col gap-3 text-sm text-gray-700">
+            {created ? (
+              <p className="text-green-700 font-medium">
+                Created spreadsheet <span className="font-semibold">Receipt Scanner Pending</span> with
+                all Pending columns.
+              </p>
+            ) : (
+              <p>
+                Using spreadsheet <span className="font-semibold">Receipt Scanner Pending</span>.
+              </p>
+            )}
+
+            {scriptInstall && (
+              <p className={scriptInstall.ok ? "text-green-700" : "text-amber-800"}>
+                {scriptInstall.message}
+              </p>
+            )}
+
+            <div className="flex flex-wrap gap-2">
+              <a
+                href={spreadsheetUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium"
+              >
+                Open sheet
+              </a>
+              <button
+                type="button"
+                onClick={() => setShowScript((v) => !v)}
+                className="px-3 py-2 rounded-lg border border-gray-300 text-gray-700 text-sm font-medium"
+              >
+                {showScript ? "Hide Apps Script" : "Show Apps Script"}
+              </button>
+              {script && (
+                <button
+                  type="button"
+                  onClick={() => void copyScript()}
+                  className="px-3 py-2 rounded-lg border border-blue-300 text-blue-700 text-sm font-medium"
+                >
+                  Copy script (ID filled in)
+                </button>
+              )}
+            </div>
+
+            {copyStatus && <p className="text-xs text-green-700">{copyStatus}</p>}
+
+            {showScript && script && (
+              <div className="flex flex-col gap-2">
+                <ol className="list-decimal list-inside text-xs text-gray-600 space-y-1">
+                  <li>Open the sheet → Extensions → Apps Script</li>
+                  <li>Paste the copied script (sheet ID already set)</li>
+                  <li>Run <code className="bg-gray-100 px-1 rounded">processCardAlertEmails</code> once and allow Gmail access</li>
+                  <li>Triggers → every 10–15 minutes</li>
+                </ol>
+                <textarea
+                  readOnly
+                  value={script}
+                  rows={12}
+                  className="w-full font-mono text-[11px] border border-gray-200 rounded-lg p-2 bg-gray-50 text-gray-800"
+                />
+              </div>
+            )}
+          </section>
+        )}
+
         <div className="flex items-center justify-between">
           <p className="text-sm text-gray-600" aria-live="polite">
-            {loading ? "Loading…" : `${items.length} waiting`}
+            {loading ? "Setting up Pending sheet…" : `${items.length} waiting`}
           </p>
           <button
             type="button"
@@ -176,8 +273,8 @@ export default function PendingReview() {
 
         {!loading && items.length === 0 && !error && (
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 text-center text-gray-500 text-sm">
-            No pending email charges. When Gmail Apps Script finds a card alert, it will show up here for
-            your approval.
+            No pending email charges yet. After Gmail Apps Script runs against your{" "}
+            <span className="font-medium">card-alerts</span> label, items will appear here for approval.
           </div>
         )}
 

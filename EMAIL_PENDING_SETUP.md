@@ -20,28 +20,26 @@ Bank/card email
 
 ---
 
-## Part A — Create the Pending spreadsheet
+## Part A — Pending spreadsheet (auto-created by the app)
 
-1. Open [Google Sheets](https://sheets.google.com) while signed into the Gmail you’ll use as the **hub** (the account that will receive forwarded alerts, or your main budget account).
-2. Create a new spreadsheet named: **`Receipt Scanner Pending`**
-3. Rename the first tab to **`Pending`** (exact name).
-4. In row 1, add these headers (A–I):
+1. Deploy the app with `GOOGLE_SERVICE_ACCOUNT_EMAIL`, `GOOGLE_PRIVATE_KEY`, and `GOOGLE_OWNER_EMAIL` set.
+2. Sign in and open **`/pending`** (or **Review email pending →**).
+3. On first load the app will:
+   - Create a Google Sheet named **`Receipt Scanner Pending`**
+   - Add a **`Pending`** tab with headers: Date, Amount, Description, Category, Source, Status, GmailMessageId, CreatedAt, Snippet
+   - Share / transfer it to `GOOGLE_OWNER_EMAIL` when possible
+   - Try to attach Apps Script via API (often blocked for service accounts)
+   - Show a **Copy script (ID filled in)** button with your sheet ID already set
+4. Optional: you can still set `GOOGLE_PENDING_SHEET_ID` to force a specific spreadsheet; otherwise the app finds/creates by name.
 
-| A | B | C | D | E | F | G | H | I |
-|---|---|---|---|---|---|---|---|---|
-| Date | Amount | Description | Category | Source | Status | GmailMessageId | CreatedAt | Snippet |
+### Finish Apps Script (one-time, required for Gmail)
 
-5. Copy the spreadsheet ID from the URL:  
-   `https://docs.google.com/spreadsheets/d/`**`THIS_ID`**`/edit`
-6. Share the spreadsheet with your **service account email** as **Editor**  
-   (same email as `GOOGLE_SERVICE_ACCOUNT_EMAIL` in the app).
-7. In Vercel / `.env.local`, set:
+Google does **not** let the service account authorize **your** Gmail inbox. You must run the script once as yourself:
 
-```bash
-GOOGLE_PENDING_SHEET_ID=THIS_ID
-```
-
-8. Redeploy (or restart `npm run dev`) so the app can read the sheet.
+1. On `/pending`, click **Open sheet** → **Extensions → Apps Script**
+2. Click **Copy script (ID filled in)** in the app and paste into the script editor (replace any stub)
+3. Run **`processCardAlertEmails`** → Allow Gmail + Sheets permissions
+4. **Triggers** → time-driven every 10–15 minutes
 
 ---
 
@@ -78,37 +76,13 @@ Skip forwarding. Create label **`card-alerts`** and a filter on that account onl
 
 ---
 
-## Part C — Install the Apps Script
+## Part C — Apps Script (if you did not use the in-app Copy button)
 
-1. Open the **Receipt Scanner Pending** spreadsheet.
+1. Open the **Receipt Scanner Pending** spreadsheet (link from `/pending`).
 2. **Extensions → Apps Script**
-3. Delete any placeholder code.
-4. Paste the contents of `scripts/gmail-to-pending.gs` from this repo.
-5. Set:
-
-```javascript
-var PENDING_SHEET_ID = "YOUR_PENDING_SPREADSHEET_ID";
-```
-
-6. Confirm the search matches your label:
-
-```javascript
-var GMAIL_QUERY = 'label:card-alerts newer_than:7d';
-```
-
-7. Click **Save** (disk icon). Name the project e.g. `Gmail to Pending`.
-8. Select function **`processCardAlertEmails`** → click **Run**.
-9. First run: grant permissions (review Gmail + Sheets access) → Allow.
-10. Check the Pending tab — if you have matching recent mail with a `$xx.xx` amount, rows should appear with `Status = pending`.
-
-### Add an automatic trigger
-
-1. In Apps Script: left sidebar **Triggers** (clock icon)
-2. **Add Trigger**
-   - Function: `processCardAlertEmails`
-   - Event source: **Time-driven**
-   - Type: **Minutes timer** → every **10 minutes** or **15 minutes**
-3. Save → authorize if asked.
+3. Paste from the app’s **Copy script (ID filled in)**, or from `scripts/gmail-to-pending.gs` with `PENDING_SHEET_ID` set.
+4. Save → Run **`processCardAlertEmails`** → authorize.
+5. Add a **time-driven trigger** every 10–15 minutes.
 
 ---
 
