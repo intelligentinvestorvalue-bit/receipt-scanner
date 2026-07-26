@@ -41,6 +41,7 @@ See `env.example` for every variable. Minimum required for a working deploy:
 | `GOOGLE_SERVICE_ACCOUNT_EMAIL` | Service account email |
 | `GOOGLE_PRIVATE_KEY` | Service account private key (`\n` as literal `\n`) |
 | `GOOGLE_OWNER_EMAIL` | Your Gmail — new month sheets are shared here |
+| `GOOGLE_PENDING_SHEET_ID` | Spreadsheet for Gmail email charges awaiting approval |
 
 **Optional:**
 
@@ -118,6 +119,14 @@ npm test         # Vitest unit tests (OCR parsers + categories)
 - Unauthenticated users are redirected to `/login`; APIs return `401`
 - **Setup** never uses a `NEXT_PUBLIC_*` secret. The UI calls a server action; the API route requires `SETUP_SECRET` and refuses to run if it is unset
 - Save / setup routes are session-protected (setup API also requires `SETUP_SECRET`)
+
+---
+
+## Email pending (Gmail → review → Sheets)
+
+Card/bank emails can be collected into a **Pending** spreadsheet via free Gmail filters + Apps Script. Open **`/pending`** in the app to edit, **Approve** (writes `Transactions`), or **Discard**.
+
+Full setup (multi-account Gmail, script, triggers): see **[EMAIL_PENDING_SETUP.md](./EMAIL_PENDING_SETUP.md)**. Sample script: `scripts/gmail-to-pending.gs`.
 
 ---
 

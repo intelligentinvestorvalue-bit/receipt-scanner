@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import Link from "next/link";
 import { EXPENSE_CATEGORIES, ExpenseCategory } from "@/lib/categories";
 import { logout } from "@/app/actions/auth";
 import { setupMonthAction } from "@/app/actions/setup";
@@ -184,6 +185,12 @@ export default function ReceiptScanner() {
         <div>
           <h1 className="text-2xl font-bold text-gray-800 mb-1">Receipt Scanner</h1>
           <p className="text-sm text-gray-500">Scan → Review → Save to Google Sheets</p>
+          <Link
+            href="/pending"
+            className="inline-block mt-2 text-sm text-blue-600 font-medium underline underline-offset-2"
+          >
+            Review email pending →
+          </Link>
         </div>
         <form action={logout}>
           <button
