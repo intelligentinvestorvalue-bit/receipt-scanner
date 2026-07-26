@@ -52,6 +52,7 @@ export default function PendingReview() {
   const [busyRow, setBusyRow] = useState<number | null>(null);
   const [actionError, setActionError] = useState("");
   const [spreadsheetUrl, setSpreadsheetUrl] = useState("");
+  const [spreadsheetName, setSpreadsheetName] = useState("");
   const [created, setCreated] = useState(false);
   const [script, setScript] = useState("");
   const [scriptInstall, setScriptInstall] = useState<ScriptInstall | null>(null);
@@ -71,6 +72,7 @@ export default function PendingReview() {
       for (const item of list) next[item.rowNumber] = toDraft(item);
       setDrafts(next);
       setSpreadsheetUrl(data.spreadsheetUrl ?? "");
+      setSpreadsheetName(data.spreadsheetName ?? "");
       setCreated(Boolean(data.created));
       setScript(typeof data.script === "string" ? data.script : "");
       setScriptInstall(data.scriptInstall ?? null);
@@ -183,12 +185,14 @@ export default function PendingReview() {
           <section className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 flex flex-col gap-3 text-sm text-gray-700">
             {created ? (
               <p className="text-green-700 font-medium">
-                Created spreadsheet <span className="font-semibold">Receipt Scanner Pending</span> with
-                all Pending columns.
+                Created a <span className="font-semibold">Pending</span> tab on{" "}
+                <span className="font-semibold">{spreadsheetName || "this month's budget sheet"}</span>{" "}
+                with all columns.
               </p>
             ) : (
               <p>
-                Using spreadsheet <span className="font-semibold">Receipt Scanner Pending</span>.
+                Using the <span className="font-semibold">Pending</span> tab on{" "}
+                <span className="font-semibold">{spreadsheetName || "this month's budget sheet"}</span>.
               </p>
             )}
 

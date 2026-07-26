@@ -6,8 +6,8 @@ export const maxDuration = 30;
 
 /**
  * GET /api/pending
- * Ensures the Pending spreadsheet exists (creates + headers on first load),
- * attempts Apps Script attach when newly created, and returns pending rows.
+ * Resolves this month's budget spreadsheet, ensures a Pending tab + headers,
+ * attempts Apps Script attach when the tab is newly created, and returns rows.
  */
 export async function GET() {
   try {
@@ -16,6 +16,7 @@ export async function GET() {
       items,
       spreadsheetId: bootstrap.spreadsheetId,
       spreadsheetUrl: bootstrap.spreadsheetUrl,
+      spreadsheetName: bootstrap.spreadsheetName,
       created: bootstrap.created,
       script: bootstrap.script,
       scriptInstall: bootstrap.scriptInstall,

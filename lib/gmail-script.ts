@@ -2,16 +2,24 @@
  * Apps Script source for Gmail → Pending.
  * Kept in code (not only on disk) so Vercel serverless can serve it.
  * scripts/gmail-to-pending.gs mirrors this for copy/paste from the repo.
+ *
+ * Writes to the Pending tab on this month's Monthly Budget_Mon_YYYY sheet
+ * (looked up by name each run so a new month does not require re-paste).
  */
 const GMAIL_PENDING_SCRIPT_TEMPLATE = `/**
- * Gmail → Pending Sheet (free Apps Script)
- * Bound to your auto-created Pending spreadsheet — sheet ID is already filled in.
- * Open the sheet → Extensions → Apps Script → paste → Run processCardAlertEmails once.
+ * Gmail → Pending tab on this month's budget sheet (free Apps Script)
+ *
+ * Finds "Monthly Budget_Mon_YYYY" (same naming as the Receipt Scanner app),
+ * creates a Pending tab if missing, then appends card/bank alert rows.
+ *
+ * Setup: open this month's budget sheet → Extensions → Apps Script → paste →
+ * Run processCardAlertEmails once → authorize → add a 10–15 min time trigger.
  *
  * See EMAIL_PENDING_SETUP.md for full setup steps.
  */
 
 // ── Config ──────────────────────────────────────────────────────────────────
+// Fallback if Drive name lookup fails (this month's sheet ID from the app)
 var PENDING_SHEET_ID = "__PENDING_SHEET_ID__";
 
 // Gmail search for labeled card/bank alerts (adjust after you create the label)
@@ -42,12 +50,47 @@ var PENDING_HEADERS = [
   "Snippet",
 ];
 
+var MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+var MONTH_FULL = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+
+function monthlyBudgetNameCandidates_() {
+  var now = new Date();
+  var idx = now.getMonth();
+  var year = String(now.getFullYear());
+  var abbr = MONTH_ABBR[idx];
+  var full = MONTH_FULL[idx];
+  return [
+    "Monthly Budget_" + abbr + "_" + year,
+    "Monthly budget_" + abbr + "_" + year,
+    "Monthly Budget_" + full + "_" + year,
+    "Monthly budget_" + full + "_" + year,
+  ];
+}
+
+/** Resolve this month's budget spreadsheet by name (or fallback ID / active). */
 function getPendingSpreadsheet_() {
+  var names = monthlyBudgetNameCandidates_();
+  for (var i = 0; i < names.length; i++) {
+    var files = DriveApp.getFilesByName(names[i]);
+    if (files.hasNext()) {
+      return SpreadsheetApp.open(files.next());
+    }
+  }
+
   try {
     var active = SpreadsheetApp.getActiveSpreadsheet();
     if (active) return active;
   } catch (e) {}
-  return SpreadsheetApp.openById(PENDING_SHEET_ID);
+
+  if (PENDING_SHEET_ID && PENDING_SHEET_ID.indexOf("__") !== 0) {
+    return SpreadsheetApp.openById(PENDING_SHEET_ID);
+  }
+
+  throw new Error(
+    "Could not find this month's budget sheet. Expected a name like \\"" +
+      names[0] +
+      "\\". Create/share it, then re-run."
+  );
 }
 
 function processCardAlertEmails() {
@@ -177,7 +220,8 @@ function cleanMerchant_(s) {
 `;
 
 /**
- * Return the Gmail→Pending Apps Script with PENDING_SHEET_ID filled in.
+ * Return the Gmail→Pending Apps Script with a fallback spreadsheet ID filled in.
+ * The script primarily finds Monthly Budget_Mon_YYYY by name each run.
  */
 export function buildGmailPendingScript(spreadsheetId: string): string {
   return GMAIL_PENDING_SCRIPT_TEMPLATE.replace(

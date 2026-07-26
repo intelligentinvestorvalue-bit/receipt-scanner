@@ -1,20 +1,22 @@
 /**
- * Gmail → Pending Sheet (free Apps Script)
+ * Gmail → Pending tab on this month's budget sheet (free Apps Script)
  *
- * Paste this into a Google Apps Script project bound to your Pending spreadsheet
- * (or a standalone script with PENDING_SHEET_ID set).
+ * Finds "Monthly Budget_Mon_YYYY" (same naming as the Receipt Scanner app),
+ * creates a Pending tab if missing, then appends card/bank alert rows.
+ *
+ * Setup: open this month's budget sheet → Extensions → Apps Script → paste →
+ * Run processCardAlertEmails once → authorize → add a 10–15 min time trigger.
  *
  * See EMAIL_PENDING_SETUP.md for full setup steps.
  */
 
 // ── Config ──────────────────────────────────────────────────────────────────
-// Spreadsheet ID from the URL: /spreadsheets/d/<THIS>/edit
-var PENDING_SHEET_ID = "PASTE_PENDING_SPREADSHEET_ID_HERE";
+// Fallback if Drive name lookup fails (this month's sheet ID from the app)
+var PENDING_SHEET_ID = "PASTE_MONTHLY_BUDGET_SHEET_ID_HERE";
 
 // Gmail search for labeled card/bank alerts (adjust after you create the label)
 var GMAIL_QUERY = 'label:card-alerts newer_than:7d';
 
-// Words that suggest a real charge (case-insensitive)
 var CHARGE_HINTS = [
   "charged",
   "charge of",
@@ -40,16 +42,47 @@ var PENDING_HEADERS = [
   "Snippet",
 ];
 
-/**
- * Run once manually, then attach a time-driven trigger (every 10–15 minutes).
- */
+var MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+var MONTH_FULL = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+
+function monthlyBudgetNameCandidates_() {
+  var now = new Date();
+  var idx = now.getMonth();
+  var year = String(now.getFullYear());
+  var abbr = MONTH_ABBR[idx];
+  var full = MONTH_FULL[idx];
+  return [
+    "Monthly Budget_" + abbr + "_" + year,
+    "Monthly budget_" + abbr + "_" + year,
+    "Monthly Budget_" + full + "_" + year,
+    "Monthly budget_" + full + "_" + year,
+  ];
+}
+
+/** Resolve this month's budget spreadsheet by name (or fallback ID / active). */
 function getPendingSpreadsheet_() {
-  // Prefer the spreadsheet this script is bound to
+  var names = monthlyBudgetNameCandidates_();
+  for (var i = 0; i < names.length; i++) {
+    var files = DriveApp.getFilesByName(names[i]);
+    if (files.hasNext()) {
+      return SpreadsheetApp.open(files.next());
+    }
+  }
+
   try {
     var active = SpreadsheetApp.getActiveSpreadsheet();
     if (active) return active;
   } catch (e) {}
-  return SpreadsheetApp.openById(PENDING_SHEET_ID);
+
+  if (PENDING_SHEET_ID && PENDING_SHEET_ID.indexOf("__") !== 0) {
+    return SpreadsheetApp.openById(PENDING_SHEET_ID);
+  }
+
+  throw new Error(
+    "Could not find this month's budget sheet. Expected a name like \"" +
+      names[0] +
+      "\". Create/share it, then re-run."
+  );
 }
 
 function processCardAlertEmails() {
@@ -122,7 +155,7 @@ function loadExistingMessageIds_(sheet) {
   var map = {};
   var lastRow = sheet.getLastRow();
   if (lastRow < 2) return map;
-  var values = sheet.getRange(2, 7, lastRow, 7).getValues(); // column G
+  var values = sheet.getRange(2, 7, lastRow, 7).getValues();
   for (var i = 0; i < values.length; i++) {
     var id = String(values[i][0] || "").trim();
     if (id) map[id] = true;
@@ -138,7 +171,6 @@ function looksLikeCharge_(haystack) {
 }
 
 function extractAmount_(text) {
-  // Prefer amounts near charge language
   var labeled = text.match(
     /(?:charged|charge(?:d)?(?:\s+of)?|spent|purchase(?:d)?|payment(?:\s+of)?|debit|amount)[^\d$]{0,20}\$?\s*([\d,]+\.\d{2})/i
   );
@@ -166,7 +198,6 @@ function extractMerchant_(subject, body, from) {
   );
   if (purchased) return cleanMerchant_(purchased[1]);
 
-  // Fallback: sender display name
   var name = from.replace(/<[^>]+>/g, "").replace(/"/g, "").trim();
   return cleanMerchant_(name || "Email charge");
 }

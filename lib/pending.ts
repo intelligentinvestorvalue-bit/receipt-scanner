@@ -1,12 +1,11 @@
 import { google } from "googleapis";
 import { ExpenseCategory } from "./categories";
-import { appendToSheet, getGoogleAuth } from "./sheets";
+import { appendToSheet, getGoogleAuth, resolveSpreadsheetId } from "./sheets";
 import { buildGmailPendingScript } from "./gmail-script";
-import { readFileSync, writeFileSync, mkdirSync } from "fs";
-import { join } from "path";
 
 /**
- * Pending email charges live in a dedicated spreadsheet (free — just another Sheet).
+ * Pending email charges live on a "Pending" tab of this month's budget spreadsheet
+ * (same file the scanner already uses — already shared with the service account).
  *
  * Tab: Pending
  * Columns:
@@ -21,7 +20,6 @@ import { join } from "path";
  *   I Snippet
  */
 
-export const PENDING_SHEET_TITLE = "Receipt Scanner Pending";
 export const PENDING_TAB = "Pending";
 export const PENDING_RANGE = `${PENDING_TAB}!A:I`;
 
@@ -56,6 +54,8 @@ export interface PendingItem {
 export interface PendingBootstrap {
   spreadsheetId: string;
   spreadsheetUrl: string;
+  spreadsheetName: string;
+  /** True when the Pending tab was created on this request. */
   created: boolean;
   script: string;
   /** Apps Script API install attempt result (service accounts usually cannot own scripts). */
@@ -67,9 +67,6 @@ export interface PendingBootstrap {
   };
 }
 
-const TMP_DIR = "/tmp/receipt-scanner";
-const PENDING_ID_CACHE = join(TMP_DIR, "pending-sheet-id.json");
-
 const DRIVE_SHEETS_SCOPES = [
   "https://www.googleapis.com/auth/spreadsheets",
   "https://www.googleapis.com/auth/drive",
@@ -80,25 +77,10 @@ const SCRIPT_SCOPES = [
   "https://www.googleapis.com/auth/script.projects",
 ];
 
-function readCachedPendingId(): string | null {
-  try {
-    const data = JSON.parse(readFileSync(PENDING_ID_CACHE, "utf8")) as {
-      id?: string;
-    };
-    return data.id ?? null;
-  } catch {
-    return null;
-  }
-}
-
-function writeCachedPendingId(id: string) {
-  try {
-    mkdirSync(TMP_DIR, { recursive: true });
-    writeFileSync(PENDING_ID_CACHE, JSON.stringify({ id }));
-  } catch {
-    /* non-fatal */
-  }
-}
+const MONTH_ABBR = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
 
 function authFor(scopes: string[]) {
   return getGoogleAuth(scopes);
@@ -108,39 +90,57 @@ function sheetsClient(scopes: string[] = DRIVE_SHEETS_SCOPES) {
   return google.sheets({ version: "v4", auth: authFor(scopes) });
 }
 
-function driveClient(scopes: string[] = DRIVE_SHEETS_SCOPES) {
-  return google.drive({ version: "v3", auth: authFor(scopes) });
+function currentMonthYear(): { month: string; year: string; label: string } {
+  const now = new Date();
+  const monthIdx = now.getMonth();
+  const month = String(monthIdx + 1).padStart(2, "0");
+  const year = String(now.getFullYear());
+  return {
+    month,
+    year,
+    label: `Monthly Budget_${MONTH_ABBR[monthIdx]}_${year}`,
+  };
 }
 
-async function findPendingSpreadsheetId(): Promise<string | null> {
+/**
+ * Resolve this month's budget spreadsheet (or GOOGLE_PENDING_SHEET_ID /
+ * GOOGLE_SHEET_ID override).
+ */
+async function resolveMonthlySpreadsheetId(): Promise<{
+  spreadsheetId: string;
+  label: string;
+}> {
   if (process.env.GOOGLE_PENDING_SHEET_ID) {
-    return process.env.GOOGLE_PENDING_SHEET_ID;
+    return {
+      spreadsheetId: process.env.GOOGLE_PENDING_SHEET_ID,
+      label: "GOOGLE_PENDING_SHEET_ID",
+    };
   }
 
-  const cached = readCachedPendingId();
-  if (cached) return cached;
-
-  const drive = driveClient();
-  const q =
-    `name = '${PENDING_SHEET_TITLE}' and ` +
-    `mimeType = 'application/vnd.google-apps.spreadsheet' and trashed = false`;
-  const res = await drive.files.list({
-    q,
-    fields: "files(id, name)",
-    pageSize: 5,
-  });
-  const id = res.data.files?.[0]?.id ?? null;
-  if (id) writeCachedPendingId(id);
-  return id;
+  const { month, year, label } = currentMonthYear();
+  const auth = authFor([
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive.metadata.readonly",
+  ]);
+  const spreadsheetId = await resolveSpreadsheetId(auth, month, year);
+  return { spreadsheetId, label };
 }
 
-async function ensurePendingTabAndHeaders(spreadsheetId: string): Promise<void> {
+/**
+ * Ensure the Pending tab exists with header row. Returns true if the tab was
+ * newly created.
+ */
+async function ensurePendingTabAndHeaders(
+  spreadsheetId: string
+): Promise<boolean> {
   const sheets = sheetsClient();
   const meta = await sheets.spreadsheets.get({
     spreadsheetId,
     fields: "sheets.properties.title",
   });
   const titles = (meta.data.sheets ?? []).map((s) => s.properties?.title ?? "");
+  let tabCreated = false;
+
   if (!titles.includes(PENDING_TAB)) {
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId,
@@ -148,6 +148,7 @@ async function ensurePendingTabAndHeaders(spreadsheetId: string): Promise<void> 
         requests: [{ addSheet: { properties: { title: PENDING_TAB } } }],
       },
     });
+    tabCreated = true;
   }
 
   const headerRes = await sheets.spreadsheets.values.get({
@@ -167,64 +168,8 @@ async function ensurePendingTabAndHeaders(spreadsheetId: string): Promise<void> 
       requestBody: { values: [Array.from(PENDING_HEADERS)] },
     });
   }
-}
 
-async function shareWithOwner(spreadsheetId: string): Promise<void> {
-  const ownerEmail = process.env.GOOGLE_OWNER_EMAIL;
-  if (!ownerEmail) return;
-
-  const drive = driveClient();
-  try {
-    await drive.permissions.create({
-      fileId: spreadsheetId,
-      transferOwnership: true,
-      sendNotificationEmail: false,
-      requestBody: {
-        type: "user",
-        role: "owner",
-        emailAddress: ownerEmail,
-      },
-    });
-  } catch {
-    // Transfer may fail if SA isn't allowed to transfer; fall back to writer share.
-    try {
-      await drive.permissions.create({
-        fileId: spreadsheetId,
-        sendNotificationEmail: false,
-        requestBody: {
-          type: "user",
-          role: "writer",
-          emailAddress: ownerEmail,
-        },
-      });
-    } catch {
-      /* already shared or non-fatal */
-    }
-  }
-}
-
-async function createPendingSpreadsheet(): Promise<string> {
-  const sheets = sheetsClient();
-  const created = await sheets.spreadsheets.create({
-    requestBody: {
-      properties: { title: PENDING_SHEET_TITLE },
-      sheets: [{ properties: { title: PENDING_TAB } }],
-    },
-    fields: "spreadsheetId",
-  });
-  const id = created.data.spreadsheetId;
-  if (!id) throw new Error("Failed to create Pending spreadsheet");
-
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: id,
-    range: `${PENDING_TAB}!A1:I1`,
-    valueInputOption: "RAW",
-    requestBody: { values: [Array.from(PENDING_HEADERS)] },
-  });
-
-  await shareWithOwner(id);
-  writeCachedPendingId(id);
-  return id;
+  return tabCreated;
 }
 
 /**
@@ -297,37 +242,29 @@ async function tryInstallAppsScript(
 }
 
 /**
- * Find or create the Pending spreadsheet, ensure headers, prepare Apps Script text.
- * Called on first load of the pending page.
+ * Find this month's budget spreadsheet, ensure a Pending tab + headers exist,
+ * and prepare Apps Script text. Called on first load of the pending page.
  */
 export async function ensurePendingBootstrap(): Promise<PendingBootstrap> {
-  let created = false;
-  let spreadsheetId = await findPendingSpreadsheetId();
-  if (!spreadsheetId) {
-    spreadsheetId = await createPendingSpreadsheet();
-    created = true;
-  } else {
-    await ensurePendingTabAndHeaders(spreadsheetId);
-    // Keep owner shared even for pre-existing sheets
-    await shareWithOwner(spreadsheetId);
-    writeCachedPendingId(spreadsheetId);
-  }
+  const { spreadsheetId, label } = await resolveMonthlySpreadsheetId();
+  const created = await ensurePendingTabAndHeaders(spreadsheetId);
 
   const script = buildGmailPendingScript(spreadsheetId);
-  // Service accounts usually cannot own Apps Script projects. Only attempt once
-  // when the sheet is first created; UI always offers a pre-filled copy/paste script.
+  // Service accounts usually cannot own Apps Script projects. Only attempt when
+  // the Pending tab is first created; UI always offers a pre-filled copy/paste script.
   const scriptInstall = created
     ? await tryInstallAppsScript(spreadsheetId, script)
     : {
         attempted: false,
         ok: false,
         message:
-          "Sheet ready. If Apps Script is not attached yet, copy the script below into Extensions → Apps Script, run once, then add a time trigger.",
+          "Pending tab ready on this month's budget sheet. If Apps Script is not attached yet, copy the script below into Extensions → Apps Script, run once, then add a time trigger.",
       };
 
   return {
     spreadsheetId,
     spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`,
+    spreadsheetName: label,
     created,
     script,
     scriptInstall,
@@ -376,7 +313,7 @@ async function resolvePendingId(): Promise<string> {
   return boot.spreadsheetId;
 }
 
-/** List rows with Status = pending (ensures sheet exists first). */
+/** List rows with Status = pending (ensures Pending tab exists first). */
 export async function listPendingItems(): Promise<{
   items: PendingItem[];
   bootstrap: PendingBootstrap;
