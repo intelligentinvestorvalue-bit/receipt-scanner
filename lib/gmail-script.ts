@@ -93,6 +93,43 @@ function getPendingSpreadsheet_() {
   );
 }
 
+/**
+ * Remove card-alerts label and move the whole thread to Trash.
+ * Trashing only GmailMessage often leaves the conversation in Inbox.
+ */
+function trashHubThread_(thread) {
+  if (!thread) return;
+  try {
+    var label = GmailApp.getUserLabelByName("card-alerts");
+    if (label) {
+      try {
+        thread.removeLabel(label);
+      } catch (eLabel) {}
+    }
+  } catch (eFind) {}
+
+  try {
+    thread.moveToTrash();
+    return;
+  } catch (eThread) {
+    console.error("thread.moveToTrash failed: " + eThread);
+  }
+
+  // Fallback: trash each message individually
+  try {
+    var msgs = thread.getMessages();
+    for (var i = 0; i < msgs.length; i++) {
+      try {
+        msgs[i].moveToTrash();
+      } catch (eMsg) {
+        console.error("msg.moveToTrash failed: " + eMsg);
+      }
+    }
+  } catch (eAll) {
+    console.error("trashHubThread_ failed: " + eAll);
+  }
+}
+
 function processCardAlertEmails() {
   var ss = getPendingSpreadsheet_();
   var sheet = ss.getSheetByName("Pending");
@@ -103,15 +140,20 @@ function processCardAlertEmails() {
 
   var existingIds = loadExistingMessageIds_(sheet);
   var threads = GmailApp.search(GMAIL_QUERY, 0, 50);
+  // Trash each matching thread once after processing (avoids inbox leftovers).
+  var threadsToTrash = {};
 
   for (var t = 0; t < threads.length; t++) {
-    var messages = threads[t].getMessages();
+    var thread = threads[t];
+    var threadId = thread.getId();
+    var messages = thread.getMessages();
     for (var m = 0; m < messages.length; m++) {
       var msg = messages[m];
       var id = msg.getId();
-      // Already captured earlier — remove from hub inbox and skip.
+
+      // Already on Pending — still clear hub mail.
       if (existingIds[id]) {
-        msg.moveToTrash();
+        threadsToTrash[threadId] = thread;
         continue;
       }
 
@@ -120,15 +162,15 @@ function processCardAlertEmails() {
       var from = msg.getFrom() || "";
       var haystack = (subject + "\\n" + body).toLowerCase();
 
-      // Labeled but not a usable charge — clear it from the hub inbox.
+      // Labeled but not a usable charge — clear hub mail, do not write Pending.
       if (!looksLikeCharge_(haystack)) {
-        msg.moveToTrash();
+        threadsToTrash[threadId] = thread;
         continue;
       }
 
       var amount = extractAmount_(subject + "\\n" + body);
       if (!amount) {
-        msg.moveToTrash();
+        threadsToTrash[threadId] = thread;
         continue;
       }
 
@@ -154,9 +196,16 @@ function processCardAlertEmails() {
       ]);
 
       existingIds[id] = true;
-      // Remove from hub Gmail after it's safely on the Pending tab (Trash; not permanent).
-      msg.moveToTrash();
+      threadsToTrash[threadId] = thread;
     }
+  }
+
+  // Ensure Pending rows are saved before removing Gmail threads.
+  SpreadsheetApp.flush();
+
+  var trashIds = Object.keys(threadsToTrash);
+  for (var k = 0; k < trashIds.length; k++) {
+    trashHubThread_(threadsToTrash[trashIds[k]]);
   }
 }
 
