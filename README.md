@@ -41,7 +41,7 @@ See `env.example` for every variable. Minimum required for a working deploy:
 | `GOOGLE_SERVICE_ACCOUNT_EMAIL` | Service account email |
 | `GOOGLE_PRIVATE_KEY` | Service account private key (`\n` as literal `\n`) |
 | `GOOGLE_OWNER_EMAIL` | Your Gmail — new month sheets are shared here |
-| `GOOGLE_PENDING_SHEET_ID` | Spreadsheet for Gmail email charges awaiting approval |
+| `GOOGLE_PENDING_SHEET_ID` | Optional override; otherwise auto-created as **Receipt Scanner Pending** on first `/pending` visit |
 
 **Optional:**
 
@@ -126,7 +126,9 @@ npm test         # Vitest unit tests (OCR parsers + categories)
 
 Card/bank emails can be collected into a **Pending** spreadsheet via free Gmail filters + Apps Script. Open **`/pending`** in the app to edit, **Approve** (writes `Transactions`), or **Discard**.
 
-Full setup (multi-account Gmail, script, triggers): see **[EMAIL_PENDING_SETUP.md](./EMAIL_PENDING_SETUP.md)**. Sample script: `scripts/gmail-to-pending.gs`.
+On first visit, the app **creates** `Receipt Scanner Pending` (headers included), shares it with `GOOGLE_OWNER_EMAIL`, and offers a **Copy script** with the sheet ID already filled in. Gmail authorization still requires you to run the script once as yourself (Google limitation).
+
+Full setup (multi-account Gmail, triggers): see **[EMAIL_PENDING_SETUP.md](./EMAIL_PENDING_SETUP.md)**. Sample script: `scripts/gmail-to-pending.gs`.
 
 ---
 
