@@ -44,7 +44,12 @@ Google does **not** let the service account authorize **your** Gmail inbox. You 
 3. Run **`processCardAlertEmails`** → Allow Gmail + Sheets + Drive permissions
 4. **Triggers** → time-driven every 10–15 minutes
 
-After processing, the script removes the **card-alerts** label and moves the **whole Gmail thread** to **Trash** on the hub account (not permanent delete). That includes charge emails written to **Pending** and labeled emails with no usable amount. Re-copy the script from `/pending` after any update — Vercel does not change an already-pasted Apps Script.
+**Gmail deletion:** The Vercel app cannot delete your Gmail (service account has no mailbox access). Apps Script does it:
+
+1. When ingesting `card-alerts` mail → trash the thread  
+2. When Pending **Status** is `approved` or `discarded` (after you Approve/Discard in the app) → trash by `GmailMessageId` on the next script run  
+
+Gmail ids are stored as `gid:…` text so Sheets does not corrupt them. Re-copy the script from `/pending` after any update — Vercel does not change an already-pasted Apps Script. After Approve, either wait for the 10–15 min trigger or run **`processCardAlertEmails`** once.
 
 When the new month’s budget sheet appears, the script looks it up by name automatically — you do **not** need to re-paste the sheet ID each month. Still create/share the new monthly file with the service account (or use **Setup This Month's Sheet**).
 

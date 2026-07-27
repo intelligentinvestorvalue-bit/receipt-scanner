@@ -85,6 +85,19 @@ function getPendingSpreadsheet_() {
   );
 }
 
+/** Normalize Gmail ids stored in the sheet (prefix avoids Sheets number corruption). */
+function normalizeGmailId_(raw) {
+  return String(raw || "")
+    .trim()
+    .replace(/^gid:/i, "")
+    .replace(/^'/, "");
+}
+
+function storeGmailId_(id) {
+  // Prefix forces plain text in Sheets (raw numeric ids get mangled).
+  return "gid:" + String(id || "").trim();
+}
+
 /**
  * Remove card-alerts label and move the whole thread to Trash.
  * Trashing only GmailMessage often leaves the conversation in Inbox.
@@ -122,6 +135,48 @@ function trashHubThread_(thread) {
   }
 }
 
+/** Trash by Gmail message id (used after Approve/Discard in the web app). */
+function trashByGmailId_(rawId) {
+  var gmailId = normalizeGmailId_(rawId);
+  if (!gmailId) return false;
+  try {
+    var msg = GmailApp.getMessageById(gmailId);
+    trashHubThread_(msg.getThread());
+    return true;
+  } catch (e) {
+    console.error("trashByGmailId_ failed for " + gmailId + ": " + e);
+    return false;
+  }
+}
+
+/**
+ * After the web app sets Status to approved/discarded, delete the hub email.
+ * Also retries pending rows whose first trash attempt failed.
+ */
+function cleanupSheetLinkedGmail_(sheet) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  // Keep column G as plain text so ids are not converted to 1.23E+18
+  try {
+    sheet.getRange(2, 7, lastRow, 7).setNumberFormat("@");
+  } catch (eFmt) {}
+
+  var data = sheet.getRange(2, 6, lastRow, 7).getValues(); // F Status, G GmailMessageId
+  for (var i = 0; i < data.length; i++) {
+    var status = String(data[i][0] || "").toLowerCase().trim();
+    var gmailId = normalizeGmailId_(data[i][1]);
+    if (!gmailId) continue;
+    if (
+      status === "approved" ||
+      status === "discarded" ||
+      status === "pending"
+    ) {
+      trashByGmailId_(gmailId);
+    }
+  }
+}
+
 function processCardAlertEmails() {
   var ss = getPendingSpreadsheet_();
   var sheet = ss.getSheetByName("Pending");
@@ -129,6 +184,9 @@ function processCardAlertEmails() {
     sheet = ss.insertSheet("Pending");
   }
   ensureHeaders_(sheet);
+
+  // Delete hub mail for rows already approved/discarded in the web app.
+  cleanupSheetLinkedGmail_(sheet);
 
   var existingIds = loadExistingMessageIds_(sheet);
   var threads = GmailApp.search(GMAIL_QUERY, 0, 50);
@@ -182,7 +240,7 @@ function processCardAlertEmails() {
         "Personal",
         source,
         "pending",
-        id,
+        storeGmailId_(id),
         new Date().toISOString(),
         snippet,
       ]);
@@ -199,6 +257,9 @@ function processCardAlertEmails() {
   for (var k = 0; k < trashIds.length; k++) {
     trashHubThread_(threadsToTrash[trashIds[k]]);
   }
+
+  // Second pass: approved/discarded (and pending retries) by stored message id.
+  cleanupSheetLinkedGmail_(sheet);
 }
 
 function ensureHeaders_(sheet) {
@@ -219,7 +280,7 @@ function loadExistingMessageIds_(sheet) {
   if (lastRow < 2) return map;
   var values = sheet.getRange(2, 7, lastRow, 7).getValues();
   for (var i = 0; i < values.length; i++) {
-    var id = String(values[i][0] || "").trim();
+    var id = normalizeGmailId_(values[i][0]);
     if (id) map[id] = true;
   }
   return map;

@@ -302,7 +302,7 @@ function rowToItem(rowNumber: number, row: string[]): PendingItem | null {
     category: (row[3] ?? "Personal").trim() || "Personal",
     source: (row[4] ?? "").trim(),
     status,
-    gmailMessageId: (row[6] ?? "").trim(),
+    gmailMessageId: (row[6] ?? "").trim().replace(/^gid:/i, "").replace(/^'/, ""),
     createdAt: (row[7] ?? "").trim(),
     snippet: (row[8] ?? "").trim(),
   };
