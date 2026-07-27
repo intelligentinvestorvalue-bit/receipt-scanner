@@ -6,7 +6,6 @@ import { join } from "path";
 const MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const MONTH_FULL = ["January","February","March","April","May","June","July","August","September","October","November","December"];
 
-// Cache spreadsheet IDs in /tmp so warm serverless instances skip the Drive API call.
 const TMP_DIR = "/tmp/receipt-scanner";
 const CACHE_FILE = join(TMP_DIR, "sheet-id-cache.json");
 
@@ -25,39 +24,35 @@ function writeCache(cache: Record<string, string>) {
   } catch { /* non-fatal */ }
 }
 
+export function getGoogleAuth(scopes: string[]) {
+  return new google.auth.JWT({
+    email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+    key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
+    scopes,
+  });
+}
+
 /**
- * Uses Google Drive API to find this month's spreadsheet by name.
- * Tries 4 case-insensitive name variants, e.g.:
- *   "Monthly Budget_Apr_2026", "Monthly budget_Apr_2026",
- *   "Monthly Budget_April_2026", "Monthly budget_April_2026"
- *
- * Falls back to GOOGLE_SHEET_ID env var if set (manual override).
- * Throws if nothing is found.
+ * Resolve this month's budget spreadsheet ID (or GOOGLE_SHEET_ID override).
+ * `month` is 1-12 as a string ("04"), `year` is "2026".
  */
-async function resolveSpreadsheetId(
+export async function resolveSpreadsheetId(
   auth: InstanceType<typeof google.auth.JWT>,
   month: string,
   year: string
 ): Promise<string> {
-  // Manual override always wins — skip cache and Drive lookup entirely
   if (process.env.GOOGLE_SHEET_ID) return process.env.GOOGLE_SHEET_ID;
 
-  // Return cached ID if we already resolved this month
   const cacheKey = `${year}-${month}`;
   const cachedMap = readCache();
   if (cachedMap[cacheKey]) return cachedMap[cacheKey];
 
   const idx = parseInt(month) - 1;
 
-  // Search broadly using "contains" so minor typos (e.g. "Budge" vs "Budget")
-  // and abbreviation vs full month name are all tolerated.
-  // We search for files whose name contains the month token AND the year,
-  // then client-side filter for ones that also contain "budget" (case-insensitive).
   const monthTokens = [MONTH_ABBR[idx], MONTH_FULL[idx]];
   const monthFilters = monthTokens.map(
     (tok) => `name contains '${tok}_${year}'`
   );
-  // Accept both native Google Sheets AND uploaded Excel (.xlsx) files
   const query =
     `(${monthFilters.join(" or ")}) and ` +
     `(mimeType = 'application/vnd.google-apps.spreadsheet' or ` +
@@ -72,7 +67,6 @@ async function resolveSpreadsheetId(
   });
 
   const allFiles = res.data.files ?? [];
-  // Prefer files that contain "budget" in their name (case-insensitive)
   const files =
     allFiles.filter((f) => /budget/i.test(f.name ?? "")).length > 0
       ? allFiles.filter((f) => /budget/i.test(f.name ?? ""))
@@ -94,37 +88,25 @@ async function resolveSpreadsheetId(
   return resolvedId;
 }
 
+/** Format YYYY-MM-DD → M/D/YYYY for the budget sheet style. */
+export function formatSheetDate(isoDate: string): string {
+  const [year, month, day] = isoDate.split("-");
+  return `${parseInt(month)}/${parseInt(day)}/${year}`;
+}
+
 /**
  * Appends one row to the "Transactions" tab of this month's spreadsheet.
- *
- * Spreadsheet is auto-discovered via Drive API by name (e.g. "Monthly Budget_Apr_2026").
- * Set GOOGLE_SHEET_ID in .env.local to override with a specific spreadsheet ID.
- *
- * Required env vars:
- *   GOOGLE_SERVICE_ACCOUNT_EMAIL  — from your service account JSON
- *   GOOGLE_PRIVATE_KEY            — from your service account JSON (with \n for newlines)
- *   GOOGLE_SHEET_ID               — (optional) hard-coded spreadsheet ID override
  */
 export async function appendToSheet(receipt: ParsedReceipt): Promise<void> {
-  const auth = new google.auth.JWT({
-    email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-    key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
-    scopes: [
-      "https://www.googleapis.com/auth/spreadsheets",
-      "https://www.googleapis.com/auth/drive.metadata.readonly",
-    ],
-  });
+  const auth = getGoogleAuth([
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive.metadata.readonly",
+  ]);
 
-  // Format: Date as M/D/YYYY to match your existing sheet style (e.g. 4/1/2026)
-  const [year, month, day] = receipt.date.split("-");
-  const formattedDate = `${parseInt(month)}/${parseInt(day)}/${year}`;
-  const formattedAmount = receipt.amount.toFixed(2);
-
+  const [year, month] = receipt.date.split("-");
   const spreadsheetId = await resolveSpreadsheetId(auth, month, year);
-
   const sheets = google.sheets({ version: "v4", auth });
 
-  // Append to the Transactions tab, columns A:D
   await sheets.spreadsheets.values.append({
     spreadsheetId,
     range: "Transactions!A:D",
@@ -132,7 +114,12 @@ export async function appendToSheet(receipt: ParsedReceipt): Promise<void> {
     insertDataOption: "INSERT_ROWS",
     requestBody: {
       values: [
-        [formattedDate, formattedAmount, receipt.description, receipt.category],
+        [
+          formatSheetDate(receipt.date),
+          receipt.amount.toFixed(2),
+          receipt.description,
+          receipt.category,
+        ],
       ],
     },
   });

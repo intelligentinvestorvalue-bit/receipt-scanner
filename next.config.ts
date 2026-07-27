@@ -20,11 +20,13 @@ const securityHeaders = [
     key: "Content-Security-Policy",
     value: [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+      // wasm-unsafe-eval + jsDelivr required by Tesseract.js (OCR worker + language data)
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' https://cdn.jsdelivr.net blob:",
+      "worker-src 'self' blob:",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' blob: data:",
       "font-src 'self'",
-      "connect-src 'self'",
+      "connect-src 'self' https://cdn.jsdelivr.net",
       "frame-ancestors 'none'",
     ].join("; "),
   },
